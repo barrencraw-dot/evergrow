@@ -1,0 +1,504 @@
+// NumberFormatter.js
+// Formats large numbers for idle games with various notation systems
+// Implements psychological number presentation for better comprehension
+
+class NumberFormatter {
+    constructor() {
+        // Configuration
+        this.config = {
+            // Default notation
+            notation: 'standard', // standard, scientific, engineering, letters
+            
+            // Precision settings
+            decimalPlaces: 2,
+            trailingZeros: false,
+            
+            // Threshold for notation switch
+            notationThreshold: 1000000, // 1 million
+            
+            // Separator settings
+            thousandsSeparator: ',',
+            decimalSeparator: '.',
+            
+            // Animation settings
+            animateChanges: true,
+            animationDuration: 500,
+            
+            // Color coding
+            useColorCoding: true,
+            colorThresholds: {
+                low: { value: 1000, color: '#888888' },
+                medium: { value: 1000000, color: '#ffffff' },
+                high: { value: 1000000000, color: '#FFD700' },
+                extreme: { value: 1000000000000, color: '#FF69B4' }
+            }
+        };
+        
+        // Standard suffixes (K, M, B, T, etc.)
+        this.standardSuffixes = [
+            '', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc',
+            'UDc', 'DDc', 'TDc', 'QaDc', 'QiDc', 'SxDc', 'SpDc', 'OcDc', 'NoDc', 'Vg',
+            'UVg', 'DVg', 'TVg', 'QaVg', 'QiVg', 'SxVg', 'SpVg', 'OcVg', 'NoVg', 'Tg',
+            'UTg', 'DTg', 'TTg', 'QaTg', 'QiTg', 'SxTg', 'SpTg', 'OcTg', 'NoTg', 'Qd',
+            'UQd', 'DQd', 'TQd', 'QaQd', 'QiQd', 'SxQd', 'SpQd', 'OcQd', 'NoQd', 'Qq',
+            'UQq', 'DQq', 'TQq', 'QaQq', 'QiQq', 'SxQq', 'SpQq', 'OcQq', 'NoQq', 'Sg'
+        ];
+        
+        // Letter notation (AA, AB, AC, etc.)
+        this.letterNotation = this.generateLetterNotation();
+        
+        // Cache for formatted values
+        this.cache = new Map();
+        this.cacheSize = 1000;
+        
+        // Animation tracking
+        this.animatingElements = new Map();
+    }
+    
+    // Main formatting method
+    format(value, options = {}) {
+        // Merge options with config
+        const settings = { ...this.config, ...options };
+        
+        // Handle special cases
+        if (!isFinite(value)) {
+            return this.handleInfinity(value);
+        }
+        
+        if (value === 0) {
+            return '0';
+        }
+        
+        // Check cache
+        const cacheKey = `${value}_${JSON.stringify(settings)}`;
+        if (this.cache.has(cacheKey)) {
+            return this.cache.get(cacheKey);
+        }
+        
+        // Format based on notation
+        let formatted;
+        
+        switch (settings.notation) {
+            case 'scientific':
+                formatted = this.formatScientific(value, settings);
+                break;
+                
+            case 'engineering':
+                formatted = this.formatEngineering(value, settings);
+                break;
+                
+            case 'letters':
+                formatted = this.formatLetters(value, settings);
+                break;
+                
+            default:
+                formatted = this.formatStandard(value, settings);
+        }
+        
+        // Add to cache
+        this.addToCache(cacheKey, formatted);
+        
+        return formatted;
+    }
+    
+    // Standard notation (K, M, B, etc.)
+    formatStandard(value, settings) {
+        const absValue = Math.abs(value);
+        
+        // Below threshold, use regular formatting
+        if (absValue < settings.notationThreshold) {
+            return this.formatRegular(value, settings);
+        }
+        
+        // Find appropriate suffix
+        let suffixIndex = 0;
+        let scaledValue = absValue;
+        
+        while (scaledValue >= 1000 && suffixIndex < this.standardSuffixes.length - 1) {
+            scaledValue /= 1000;
+            suffixIndex++;
+        }
+        
+        // Apply sign
+        if (value < 0) {
+            scaledValue = -scaledValue;
+        }
+        
+        // Format the number
+        const formatted = this.roundToPrecision(scaledValue, settings.decimalPlaces);
+        const suffix = this.standardSuffixes[suffixIndex];
+        
+        return `${formatted}${suffix}`;
+    }
+    
+    // Scientific notation (1.23e6)
+    formatScientific(value, settings) {
+        const exponent = Math.floor(Math.log10(Math.abs(value)));
+        const mantissa = value / Math.pow(10, exponent);
+        
+        const formattedMantissa = this.roundToPrecision(mantissa, settings.decimalPlaces);
+        
+        return `${formattedMantissa}e${exponent}`;
+    }
+    
+    // Engineering notation (powers of 1000)
+    formatEngineering(value, settings) {
+        const absValue = Math.abs(value);
+        const exponent = Math.floor(Math.log10(absValue));
+        const engExponent = Math.floor(exponent / 3) * 3;
+        const mantissa = value / Math.pow(10, engExponent);
+        
+        const formattedMantissa = this.roundToPrecision(mantissa, settings.decimalPlaces);
+        
+        return `${formattedMantissa}e${engExponent}`;
+    }
+    
+    // Letter notation (AA, AB, etc.)
+    formatLetters(value, settings) {
+        const absValue = Math.abs(value);
+        
+        if (absValue < settings.notationThreshold) {
+            return this.formatRegular(value, settings);
+        }
+        
+        // Calculate letter index
+        const logValue = Math.log10(absValue / settings.notationThreshold);
+        const letterIndex = Math.floor(logValue / 3);
+        
+        if (letterIndex >= this.letterNotation.length) {
+            // Fallback to scientific for very large numbers
+            return this.formatScientific(value, settings);
+        }
+        
+        const scaledValue = value / Math.pow(1000, letterIndex + 2);
+        const formatted = this.roundToPrecision(scaledValue, settings.decimalPlaces);
+        const suffix = this.letterNotation[letterIndex];
+        
+        return `${formatted}${suffix}`;
+    }
+    
+    // Regular number formatting (below threshold)
+    formatRegular(value, settings) {
+        const rounded = this.roundToPrecision(value, settings.decimalPlaces);
+        
+        if (settings.thousandsSeparator && Math.abs(value) >= 1000) {
+            return this.addThousandsSeparators(rounded, settings);
+        }
+        
+        return rounded;
+    }
+    
+    // Round to specified precision
+    roundToPrecision(value, decimalPlaces) {
+        const factor = Math.pow(10, decimalPlaces);
+        const rounded = Math.round(value * factor) / factor;
+        
+        // Format to fixed decimal places
+        let formatted = rounded.toFixed(decimalPlaces);
+        
+        // Remove trailing zeros if not wanted
+        if (!this.config.trailingZeros && decimalPlaces > 0) {
+            formatted = formatted.replace(/\.?0+$/, '');
+        }
+        
+        return formatted;
+    }
+    
+    // Add thousands separators
+    addThousandsSeparators(value, settings) {
+        const parts = value.toString().split('.');
+        const integerPart = parts[0];
+        const decimalPart = parts[1];
+        
+        // Add separators to integer part
+        const withSeparators = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, settings.thousandsSeparator);
+        
+        // Reconstruct number
+        if (decimalPart) {
+            return `${withSeparators}${settings.decimalSeparator}${decimalPart}`;
+        }
+        
+        return withSeparators;
+    }
+    
+    // Handle infinity
+    handleInfinity(value) {
+        if (value === Infinity) {
+            return '∞';
+        }
+        if (value === -Infinity) {
+            return '-∞';
+        }
+        return 'NaN';
+    }
+    
+    // Generate letter notation sequences
+    generateLetterNotation() {
+        const letters = [];
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        
+        // Single letters (A-Z)
+        for (let i = 0; i < 26; i++) {
+            letters.push(alphabet[i]);
+        }
+        
+        // Double letters (AA-ZZ)
+        for (let i = 0; i < 26; i++) {
+            for (let j = 0; j < 26; j++) {
+                letters.push(alphabet[i] + alphabet[j]);
+            }
+        }
+        
+        // Triple letters (AAA-ZZZ) - first 100
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 26; j++) {
+                if (letters.length >= 1000) break;
+                letters.push(alphabet[i] + alphabet[i] + alphabet[j]);
+            }
+        }
+        
+        return letters;
+    }
+    
+    // Format with color coding
+    formatWithColor(value, options = {}) {
+        const formatted = this.format(value, options);
+        
+        if (!this.config.useColorCoding) {
+            return formatted;
+        }
+        
+        // Determine color based on value
+        let color = '#ffffff'; // Default white
+        
+        for (const [level, threshold] of Object.entries(this.config.colorThresholds)) {
+            if (Math.abs(value) >= threshold.value) {
+                color = threshold.color;
+            }
+        }
+        
+        return `<span style="color: ${color}">${formatted}</span>`;
+    }
+    
+    // Format difference (with + or -)
+    formatDifference(value, options = {}) {
+        const formatted = this.format(Math.abs(value), options);
+        
+        if (value > 0) {
+            return `+${formatted}`;
+        } else if (value < 0) {
+            return `-${formatted}`;
+        }
+        
+        return formatted;
+    }
+    
+    // Format percentage
+    formatPercentage(value, decimalPlaces = 1) {
+        const percentage = value * 100;
+        return `${percentage.toFixed(decimalPlaces)}%`;
+    }
+    
+    // Format time (seconds to readable)
+    formatTime(seconds) {
+        if (seconds < 60) {
+            return `${Math.floor(seconds)}s`;
+        }
+        
+        if (seconds < 3600) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = Math.floor(seconds % 60);
+            return `${minutes}m ${remainingSeconds}s`;
+        }
+        
+        if (seconds < 86400) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${minutes}m`;
+        }
+        
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        return `${days}d ${hours}h`;
+    }
+    
+    // Format with animation
+    animateValue(element, startValue, endValue, duration = null, options = {}) {
+        if (!this.config.animateChanges) {
+            element.textContent = this.format(endValue, options);
+            return;
+        }
+        
+        const animDuration = duration || this.config.animationDuration;
+        const startTime = Date.now();
+        
+        // Cancel existing animation
+        if (this.animatingElements.has(element)) {
+            cancelAnimationFrame(this.animatingElements.get(element));
+        }
+        
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / animDuration, 1);
+            
+            // Easing function (ease-out)
+            const easeProgress = 1 - Math.pow(1 - progress, 3);
+            
+            // Calculate current value
+            const currentValue = startValue + (endValue - startValue) * easeProgress;
+            
+            // Update element
+            element.textContent = this.format(currentValue, options);
+            
+            if (progress < 1) {
+                const animId = requestAnimationFrame(animate);
+                this.animatingElements.set(element, animId);
+            } else {
+                this.animatingElements.delete(element);
+            }
+        };
+        
+        animate();
+    }
+    
+    // Compare two values and return ratio
+    compareValues(value1, value2) {
+        if (value2 === 0) return Infinity;
+        
+        const ratio = value1 / value2;
+        
+        if (ratio >= 2) {
+            return `${this.format(ratio)}x`;
+        } else if (ratio >= 1) {
+            const percentage = ((ratio - 1) * 100).toFixed(1);
+            return `+${percentage}%`;
+        } else {
+            const percentage = ((1 - ratio) * 100).toFixed(1);
+            return `-${percentage}%`;
+        }
+    }
+    
+    // Format range
+    formatRange(min, max, options = {}) {
+        const formattedMin = this.format(min, options);
+        const formattedMax = this.format(max, options);
+        
+        return `${formattedMin} - ${formattedMax}`;
+    }
+    
+    // Parse formatted number back to value
+    parse(formatted) {
+        // Remove color tags if present
+        const cleaned = formatted.replace(/<[^>]*>/g, '');
+        
+        // Extract number and suffix
+        const match = cleaned.match(/^([+-]?[\d.]+)([A-Za-z]*)$/);
+        if (!match) return NaN;
+        
+        const [, numberPart, suffix] = match;
+        let value = parseFloat(numberPart);
+        
+        if (!suffix) return value;
+        
+        // Find suffix in standard notation
+        const suffixIndex = this.standardSuffixes.indexOf(suffix);
+        if (suffixIndex > 0) {
+            return value * Math.pow(1000, suffixIndex);
+        }
+        
+        // Check letter notation
+        const letterIndex = this.letterNotation.indexOf(suffix);
+        if (letterIndex >= 0) {
+            return value * Math.pow(1000, letterIndex + 2);
+        }
+        
+        // Check scientific notation
+        if (suffix.startsWith('e')) {
+            const exponent = parseInt(suffix.substr(1));
+            return value * Math.pow(10, exponent);
+        }
+        
+        return value;
+    }
+    
+    // Cache management
+    addToCache(key, value) {
+        this.cache.set(key, value);
+        
+        // Limit cache size
+        if (this.cache.size > this.cacheSize) {
+            // Remove oldest entries
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+    }
+    
+    clearCache() {
+        this.cache.clear();
+    }
+    
+    // Configuration
+    setNotation(notation) {
+        this.config.notation = notation;
+        this.clearCache();
+    }
+    
+    setDecimalPlaces(places) {
+        this.config.decimalPlaces = places;
+        this.clearCache();
+    }
+    
+    setColorCoding(enabled) {
+        this.config.useColorCoding = enabled;
+    }
+    
+    setAnimations(enabled) {
+        this.config.animateChanges = enabled;
+    }
+    
+    // Utility methods
+    abbreviate(text, maxLength = 20) {
+        if (text.length <= maxLength) return text;
+        
+        return text.substr(0, maxLength - 3) + '...';
+    }
+    
+    // Format for display with unit
+    formatWithUnit(value, unit, options = {}) {
+        const formatted = this.format(value, options);
+        return `${formatted} ${unit}`;
+    }
+    
+    // Format currency
+    formatCurrency(value, symbol = '$', options = {}) {
+        const formatted = this.format(value, options);
+        
+        if (symbol === '$' || symbol === '£' || symbol === '€') {
+            return `${symbol}${formatted}`;
+        }
+        
+        return `${formatted} ${symbol}`;
+    }
+    
+    // Get magnitude (for sorting)
+    getMagnitude(value) {
+        if (value === 0) return 0;
+        return Math.floor(Math.log10(Math.abs(value)));
+    }
+    
+    // Format with relative size indicator
+    formatWithIndicator(value, referenceValue, options = {}) {
+        const formatted = this.format(value, options);
+        
+        if (value > referenceValue * 1.1) {
+            return `${formatted} ↑`;
+        } else if (value < referenceValue * 0.9) {
+            return `${formatted} ↓`;
+        }
+        
+        return formatted;
+    }
+}
+
+// Export singleton instance
+export default new NumberFormatter();

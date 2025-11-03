@@ -1,0 +1,812 @@
+// Analytics.js
+// Comprehensive analytics system for tracking player behavior
+// Implements psychological profiling and predictive modeling
+
+class Analytics {
+    constructor() {
+        // Analytics configuration
+        this.config = {
+            // Tracking settings
+            enabled: true,
+            debug: false,
+            sampleRate: 1.0, // Track 100% of events
+            
+            // Batching settings
+            batchSize: 50,
+            batchInterval: 30000, // 30 seconds
+            maxQueueSize: 1000,
+            
+            // Session settings
+            sessionTimeout: 1800000, // 30 minutes
+            heartbeatInterval: 60000, // 1 minute
+            
+            // Privacy settings
+            anonymizeIp: true,
+            respectDoNotTrack: true,
+            requireConsent: false,
+            
+            // Endpoints
+            endpoints: {
+                events: '/api/analytics/events',
+                profiles: '/api/analytics/profiles',
+                metrics: '/api/analytics/metrics'
+            }
+        };
+        
+        // Event queue
+        this.eventQueue = [];
+        this.queueTimer = null;
+        
+        // Session data
+        this.session = {
+            id: this.generateSessionId(),
+            startTime: Date.now(),
+            lastActivity: Date.now(),
+            pageViews: 0,
+            events: 0,
+            
+            // Device info
+            device: {
+                type: this.detectDeviceType(),
+                os: this.detectOS(),
+                browser: this.detectBrowser(),
+                screen: {
+                    width: window.screen.width,
+                    height: window.screen.height,
+                    dpr: window.devicePixelRatio || 1
+                }
+            },
+            
+            // User info
+            user: {
+                id: this.getUserId(),
+                isNew: true,
+                cohort: this.determineCohort(),
+                segments: []
+            }
+        };
+        
+        // Metrics tracking
+        this.metrics = {
+            // Engagement metrics
+            timeSpent: 0,
+            clicks: 0,
+            purchases: 0,
+            adsWatched: 0,
+            
+            // Progression metrics
+            currency: {
+                earned: 0,
+                spent: 0,
+                peak: 0
+            },
+            
+            prestige: {
+                count: 0,
+                totalPoints: 0
+            },
+            
+            // Behavioral metrics
+            sessionCount: 0,
+            daysActive: new Set(),
+            retentionDays: [false, false, false, false, false, false, false], // D1-D7
+            
+            // Monetization metrics
+            revenue: {
+                total: 0,
+                iap: 0,
+                ads: 0,
+                subscriptions: 0
+            },
+            
+            ltv: 0, // Lifetime value
+            arpu: 0, // Average revenue per user
+            arppu: 0 // Average revenue per paying user
+        };
+        
+        // Player profiling
+        this.profile = {
+            // Player type classification
+            type: null, // Will be: achiever, explorer, socializer, killer
+            
+            // Behavioral patterns
+            patterns: {
+                playTime: 'unknown', // casual, regular, hardcore
+                spendingBehavior: 'unknown', // f2p, minnow, dolphin, whale
+                engagementLevel: 'unknown', // low, medium, high
+                churnRisk: 'low' // low, medium, high
+            },
+            
+            // Predictive scores
+            predictions: {
+                likelyToSpend: 0,
+                likelyToChurn: 0,
+                likelyToShare: 0,
+                likelyToSubscribe: 0
+            },
+            
+            // Psychological profile
+            psychology: {
+                impulsivity: 0,
+                patience: 0,
+                competitiveness: 0,
+                completionism: 0,
+                socialness: 0
+            }
+        };
+        
+        // A/B testing
+        this.experiments = new Map();
+        this.variants = new Map();
+        
+        // Custom dimensions
+        this.customDimensions = new Map();
+        
+        // Timers for time tracking
+        this.timers = new Map();
+        
+        // Funnel tracking
+        this.funnels = new Map();
+        
+        // Initialize
+        this.initialize();
+    }
+    
+    initialize() {
+        console.log('📊 Analytics system initializing...');
+        
+        // Check privacy settings
+        if (this.config.respectDoNotTrack && navigator.doNotTrack === '1') {
+            this.config.enabled = false;
+            console.log('Analytics disabled: Do Not Track enabled');
+            return;
+        }
+        
+        // Load stored data
+        this.loadStoredData();
+        
+        // Start session
+        this.startSession();
+        
+        // Set up event listeners
+        this.setupEventListeners();
+        
+        // Start batch timer
+        this.startBatchTimer();
+        
+        // Start heartbeat
+        this.startHeartbeat();
+        
+        console.log('✅ Analytics ready');
+    }
+    
+    // Core tracking method
+    track(eventName, properties = {}, options = {}) {
+        if (!this.config.enabled) return;
+        
+        // Sample rate check
+        if (Math.random() > this.config.sampleRate) return;
+        
+        // Create event object
+        const event = {
+            name: eventName,
+            properties: this.enrichProperties(properties),
+            timestamp: Date.now(),
+            session: {
+                id: this.session.id,
+                time: Date.now() - this.session.startTime
+            },
+            user: {
+                id: this.session.user.id,
+                cohort: this.session.user.cohort
+            },
+            context: this.getContext()
+        };
+        
+        // Apply options
+        if (options.immediate) {
+            this.sendEvents([event]);
+        } else {
+            this.queueEvent(event);
+        }
+        
+        // Update session
+        this.session.lastActivity = Date.now();
+        this.session.events++;
+        
+        // Update internal metrics
+        this.updateMetrics(eventName, properties);
+        
+        // Update profiling
+        this.updateProfile(eventName, properties);
+        
+        // Debug logging
+        if (this.config.debug) {
+            console.log('[Analytics] Track:', eventName, properties);
+        }
+    }
+    
+    // Enrich properties with default data
+    enrichProperties(properties) {
+        return {
+            ...properties,
+            
+            // Add custom dimensions
+            ...Object.fromEntries(this.customDimensions),
+            
+            // Add experiment variants
+            ...this.getActiveVariants(),
+            
+            // Add timestamp if not present
+            timestamp: properties.timestamp || Date.now()
+        };
+    }
+    
+    // Get context data
+    getContext() {
+        return {
+            device: this.session.device,
+            page: {
+                url: window.location.href,
+                referrer: document.referrer,
+                title: document.title
+            },
+            library: {
+                name: 'evergrow-analytics',
+                version: '1.0.0'
+            }
+        };
+    }
+    
+    // Queue event for batching
+    queueEvent(event) {
+        this.eventQueue.push(event);
+        
+        // Check queue size
+        if (this.eventQueue.length >= this.config.batchSize) {
+            this.flushEvents();
+        } else if (this.eventQueue.length > this.config.maxQueueSize) {
+            // Drop oldest events
+            this.eventQueue = this.eventQueue.slice(-this.config.maxQueueSize);
+        }
+    }
+    
+    // Send events to server
+    async sendEvents(events) {
+        if (events.length === 0) return;
+        
+        try {
+            const response = await fetch(this.config.endpoints.events, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    events,
+                    sent_at: Date.now()
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+        } catch (error) {
+            console.error('Analytics send failed:', error);
+            
+            // Re-queue events for retry
+            this.eventQueue.unshift(...events);
+        }
+    }
+    
+    // Flush event queue
+    flushEvents() {
+        const events = this.eventQueue.splice(0, this.config.batchSize);
+        if (events.length > 0) {
+            this.sendEvents(events);
+        }
+    }
+    
+    // Update internal metrics
+    updateMetrics(eventName, properties) {
+        switch (eventName) {
+            case 'click':
+                this.metrics.clicks++;
+                break;
+                
+            case 'currency_earned':
+                this.metrics.currency.earned += properties.amount || 0;
+                this.metrics.currency.peak = Math.max(
+                    this.metrics.currency.peak,
+                    properties.total || 0
+                );
+                break;
+                
+            case 'purchase_completed':
+                this.metrics.purchases++;
+                this.metrics.revenue.total += properties.price || 0;
+                this.metrics.revenue.iap += properties.price || 0;
+                break;
+                
+            case 'ad_watched':
+                this.metrics.adsWatched++;
+                this.metrics.revenue.ads += properties.revenue || 0;
+                break;
+                
+            case 'prestige_completed':
+                this.metrics.prestige.count++;
+                this.metrics.prestige.totalPoints += properties.points || 0;
+                break;
+                
+            case 'session_start':
+                this.metrics.sessionCount++;
+                break;
+        }
+        
+        // Update time spent
+        this.metrics.timeSpent = Date.now() - this.session.startTime;
+    }
+    
+    // Update player profile
+    updateProfile(eventName, properties) {
+        // Update psychological scores based on behavior
+        switch (eventName) {
+            case 'click':
+                // Rapid clicking indicates impulsivity
+                if (properties.rapid) {
+                    this.profile.psychology.impulsivity += 0.1;
+                }
+                break;
+                
+            case 'purchase_completed':
+                // Purchase behavior
+                if (properties.price > 20) {
+                    this.profile.patterns.spendingBehavior = 'whale';
+                } else if (properties.price > 5) {
+                    this.profile.patterns.spendingBehavior = 'dolphin';
+                } else {
+                    this.profile.patterns.spendingBehavior = 'minnow';
+                }
+                break;
+                
+            case 'achievement_unlocked':
+                // Completionism
+                this.profile.psychology.completionism += 0.2;
+                break;
+                
+            case 'social_share':
+                // Social behavior
+                this.profile.psychology.socialness += 0.3;
+                break;
+                
+            case 'prestige_completed':
+                // Patience and long-term thinking
+                this.profile.psychology.patience += 0.5;
+                break;
+        }
+        
+        // Update player type classification
+        this.classifyPlayerType();
+        
+        // Update predictions
+        this.updatePredictions();
+    }
+    
+    // Classify player type (Bartle taxonomy)
+    classifyPlayerType() {
+        const scores = {
+            achiever: this.profile.psychology.completionism * 2 + 
+                     this.metrics.prestige.count * 0.5,
+            
+            explorer: this.profile.psychology.patience + 
+                     (this.metrics.clicks / this.metrics.timeSpent) * 0.1,
+            
+            socializer: this.profile.psychology.socialness * 3,
+            
+            killer: this.profile.psychology.competitiveness * 2 + 
+                   this.profile.psychology.impulsivity
+        };
+        
+        // Find highest score
+        let maxScore = 0;
+        let playerType = 'achiever';
+        
+        for (const [type, score] of Object.entries(scores)) {
+            if (score > maxScore) {
+                maxScore = score;
+                playerType = type;
+            }
+        }
+        
+        this.profile.type = playerType;
+    }
+    
+    // Update predictive scores
+    updatePredictions() {
+        // Likely to spend prediction
+        this.profile.predictions.likelyToSpend = 
+            (this.metrics.purchases > 0 ? 0.3 : 0) +
+            (this.profile.patterns.spendingBehavior !== 'f2p' ? 0.3 : 0) +
+            (this.metrics.sessionCount > 5 ? 0.2 : 0) +
+            (this.profile.psychology.impulsivity * 0.2);
+        
+        // Likely to churn prediction
+        const daysSinceLastPlay = (Date.now() - this.session.lastActivity) / 86400000;
+        this.profile.predictions.likelyToChurn = 
+            (daysSinceLastPlay > 3 ? 0.3 : 0) +
+            (this.metrics.sessionCount < 3 ? 0.3 : 0) +
+            (this.metrics.timeSpent < 300000 ? 0.2 : 0) + // Less than 5 minutes
+            (1 - this.profile.psychology.patience) * 0.2;
+        
+        // Update churn risk
+        if (this.profile.predictions.likelyToChurn > 0.7) {
+            this.profile.patterns.churnRisk = 'high';
+        } else if (this.profile.predictions.likelyToChurn > 0.4) {
+            this.profile.patterns.churnRisk = 'medium';
+        } else {
+            this.profile.patterns.churnRisk = 'low';
+        }
+    }
+    
+    // Session management
+    startSession() {
+        this.track('session_start', {
+            session_id: this.session.id,
+            is_new_user: this.session.user.isNew
+        });
+        
+        // Mark day as active
+        const today = new Date().toDateString();
+        this.metrics.daysActive.add(today);
+    }
+    
+    endSession() {
+        const duration = Date.now() - this.session.startTime;
+        
+        this.track('session_end', {
+            session_id: this.session.id,
+            duration,
+            events: this.session.events
+        });
+        
+        // Flush remaining events
+        this.flushEvents();
+    }
+    
+    // A/B testing
+    setExperiment(experimentId, variant) {
+        this.experiments.set(experimentId, {
+            id: experimentId,
+            variant,
+            timestamp: Date.now()
+        });
+        
+        this.variants.set(experimentId, variant);
+        
+        // Track exposure
+        this.track('experiment_exposure', {
+            experiment_id: experimentId,
+            variant
+        });
+    }
+    
+    getVariant(experimentId) {
+        return this.variants.get(experimentId);
+    }
+    
+    getActiveVariants() {
+        const variants = {};
+        this.variants.forEach((variant, experimentId) => {
+            variants[`exp_${experimentId}`] = variant;
+        });
+        return variants;
+    }
+    
+    // Custom dimensions
+    setCustomDimension(name, value) {
+        this.customDimensions.set(name, value);
+    }
+    
+    // Timing
+    startTimer(name) {
+        this.timers.set(name, Date.now());
+    }
+    
+    endTimer(name, properties = {}) {
+        const startTime = this.timers.get(name);
+        if (!startTime) return;
+        
+        const duration = Date.now() - startTime;
+        this.timers.delete(name);
+        
+        this.track(`timing_${name}`, {
+            ...properties,
+            duration
+        });
+        
+        return duration;
+    }
+    
+    // Funnel tracking
+    trackFunnelStep(funnelName, step, properties = {}) {
+        if (!this.funnels.has(funnelName)) {
+            this.funnels.set(funnelName, {
+                name: funnelName,
+                steps: [],
+                startTime: Date.now()
+            });
+        }
+        
+        const funnel = this.funnels.get(funnelName);
+        funnel.steps.push({
+            name: step,
+            timestamp: Date.now(),
+            properties
+        });
+        
+        this.track('funnel_step', {
+            funnel: funnelName,
+            step,
+            step_number: funnel.steps.length,
+            time_since_start: Date.now() - funnel.startTime,
+            ...properties
+        });
+    }
+    
+    completeFunnel(funnelName, properties = {}) {
+        const funnel = this.funnels.get(funnelName);
+        if (!funnel) return;
+        
+        const duration = Date.now() - funnel.startTime;
+        
+        this.track('funnel_completed', {
+            funnel: funnelName,
+            steps: funnel.steps.length,
+            duration,
+            ...properties
+        });
+        
+        this.funnels.delete(funnelName);
+    }
+    
+    // Revenue tracking
+    trackRevenue(amount, currency = 'USD', type = 'iap', properties = {}) {
+        this.track('revenue', {
+            amount,
+            currency,
+            type,
+            ...properties
+        });
+        
+        // Update LTV
+        this.metrics.ltv += amount;
+        
+        // Update ARPU/ARPPU
+        this.updateRevenueMetrics();
+    }
+    
+    updateRevenueMetrics() {
+        // ARPU - Average Revenue Per User
+        const totalUsers = parseInt(localStorage.getItem('total_users') || '1');
+        this.metrics.arpu = this.metrics.revenue.total / totalUsers;
+        
+        // ARPPU - Average Revenue Per Paying User
+        const payingUsers = this.metrics.purchases > 0 ? 1 : 0;
+        if (payingUsers > 0) {
+            this.metrics.arppu = this.metrics.revenue.total / payingUsers;
+        }
+    }
+    
+    // Screen tracking
+    trackScreen(screenName, properties = {}) {
+        this.track('screen_view', {
+            screen_name: screenName,
+            ...properties
+        });
+        
+        this.session.pageViews++;
+    }
+    
+    // Error tracking
+    trackError(error, properties = {}) {
+        this.track('error', {
+            message: error.message,
+            stack: error.stack,
+            ...properties
+        });
+    }
+    
+    // User properties
+    setUserProperty(name, value) {
+        this.session.user[name] = value;
+        
+        // Send update
+        this.track('user_property_update', {
+            property: name,
+            value
+        });
+    }
+    
+    // Get analytics data
+    getMetrics() {
+        return {
+            ...this.metrics,
+            profile: this.profile,
+            session: {
+                duration: Date.now() - this.session.startTime,
+                events: this.session.events
+            }
+        };
+    }
+    
+    getProfile() {
+        return this.profile;
+    }
+    
+    // Storage
+    loadStoredData() {
+        const stored = localStorage.getItem('analytics_data');
+        if (stored) {
+            try {
+                const data = JSON.parse(stored);
+                
+                // Restore metrics
+                if (data.metrics) {
+                    Object.assign(this.metrics, data.metrics);
+                }
+                
+                // Restore profile
+                if (data.profile) {
+                    Object.assign(this.profile, data.profile);
+                }
+                
+                // Check if returning user
+                this.session.user.isNew = false;
+                
+                // Update retention
+                this.updateRetention(data.lastVisit);
+                
+            } catch (error) {
+                console.error('Failed to load analytics data:', error);
+            }
+        }
+    }
+    
+    saveData() {
+        const data = {
+            metrics: this.metrics,
+            profile: this.profile,
+            lastVisit: Date.now(),
+            userId: this.session.user.id
+        };
+        
+        try {
+            localStorage.setItem('analytics_data', JSON.stringify(data));
+        } catch (error) {
+            console.error('Failed to save analytics data:', error);
+        }
+    }
+    
+    updateRetention(lastVisit) {
+        if (!lastVisit) return;
+        
+        const daysSince = Math.floor((Date.now() - lastVisit) / 86400000);
+        
+        // Update retention array (D1-D7)
+        for (let i = 0; i < Math.min(daysSince, 7); i++) {
+            this.metrics.retentionDays[i] = true;
+        }
+    }
+    
+    // Utility methods
+    generateSessionId() {
+        return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+    
+    getUserId() {
+        let userId = localStorage.getItem('analytics_user_id');
+        
+        if (!userId) {
+            userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            localStorage.setItem('analytics_user_id', userId);
+        }
+        
+        return userId;
+    }
+    
+    determineCohort() {
+        // Weekly cohorts
+        const date = new Date();
+        const year = date.getFullYear();
+        const week = Math.floor((date - new Date(year, 0, 1)) / 604800000);
+        
+        return `${year}-W${week}`;
+    }
+    
+    detectDeviceType() {
+        const ua = navigator.userAgent;
+        
+        if (/tablet|ipad|playbook|silk/i.test(ua)) {
+            return 'tablet';
+        }
+        
+        if (/mobile|iphone|ipod|android|blackberry|opera|mini|windows\sce|palm|smartphone|iemobile/i.test(ua)) {
+            return 'mobile';
+        }
+        
+        return 'desktop';
+    }
+    
+    detectOS() {
+        const ua = navigator.userAgent;
+        
+        if (/windows/i.test(ua)) return 'Windows';
+        if (/mac/i.test(ua)) return 'macOS';
+        if (/linux/i.test(ua)) return 'Linux';
+        if (/android/i.test(ua)) return 'Android';
+        if (/ios|iphone|ipad|ipod/i.test(ua)) return 'iOS';
+        
+        return 'Unknown';
+    }
+    
+    detectBrowser() {
+        const ua = navigator.userAgent;
+        
+        if (/chrome/i.test(ua)) return 'Chrome';
+        if (/firefox/i.test(ua)) return 'Firefox';
+        if (/safari/i.test(ua)) return 'Safari';
+        if (/edge/i.test(ua)) return 'Edge';
+        if (/opera/i.test(ua)) return 'Opera';
+        
+        return 'Unknown';
+    }
+    
+    // Timers
+    startBatchTimer() {
+        this.queueTimer = setInterval(() => {
+            this.flushEvents();
+            this.saveData();
+        }, this.config.batchInterval);
+    }
+    
+    startHeartbeat() {
+        setInterval(() => {
+            // Check session timeout
+            if (Date.now() - this.session.lastActivity > this.config.sessionTimeout) {
+                this.endSession();
+                this.startSession();
+            }
+            
+            // Send heartbeat
+            this.track('heartbeat', {
+                time_spent: this.metrics.timeSpent
+            }, { immediate: true });
+            
+        }, this.config.heartbeatInterval);
+    }
+    
+    setupEventListeners() {
+        // Page visibility
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this.track('app_background');
+                this.flushEvents();
+            } else {
+                this.track('app_foreground');
+            }
+        });
+        
+        // Before unload
+        window.addEventListener('beforeunload', () => {
+            this.endSession();
+        });
+        
+        // Errors
+        window.addEventListener('error', (event) => {
+            this.trackError(event.error);
+        });
+    }
+}
+
+// Export singleton instance
+export default new Analytics();

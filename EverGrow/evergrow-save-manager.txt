@@ -1,0 +1,1000 @@
+// SaveManager.js
+// Handles game save/load with multiple storage backends
+// Implements compression, encryption, and cloud sync
+
+class SaveManager {
+    constructor(game) {
+        this.game = game;
+        
+        // Configuration
+        this.config = {
+            // Storage backends in priority order
+            backends: ['cloud', 'indexeddb', 'localstorage'],
+            
+            // Compression
+            compressionEnabled: true,
+            compressionThreshold: 1024, // 1KB
+            
+            // Encryption
+            encryptionEnabled: false,
+            encryptionKey: null,
+            
+            // Auto-save
+            autoSaveInterval: 30000, // 30 seconds
+            autoSaveEnabled: true,
+            
+            // Cloud sync
+            cloudSyncEnabled: true,
+            cloudProvider: 'firebase',
+            syncInterval: 60000, // 1 minute
+            
+            // Save slots
+            maxSaveSlots: 3,
+            currentSlot: 0,
+            
+            // Backup
+            backupEnabled: true,
+            maxBackups: 5,
+            backupInterval: 3600000, // 1 hour
+            
+            // Save validation
+            validateOnLoad: true,
+            validateOnSave: true
+        };
+        
+        // Storage backends
+        this.backends = {
+            localstorage: new LocalStorageBackend(),
+            indexeddb: new IndexedDBBackend(),
+            cloud: new CloudBackend(this.config.cloudProvider)
+        };
+        
+        // Save metadata
+        this.metadata = {
+            version: '1.0.0',
+            gameVersion: '1.0.0',
+            platform: this.detectPlatform(),
+            device: this.getDeviceInfo()
+        };
+        
+        // Save state
+        this.saveState = {
+            lastSaveTime: 0,
+            lastSyncTime: 0,
+            lastBackupTime: 0,
+            saveInProgress: false,
+            syncInProgress: false,
+            pendingSync: false
+        };
+        
+        // Save queue for offline
+        this.saveQueue = [];
+        
+        // Timers
+        this.timers = {
+            autoSave: null,
+            cloudSync: null,
+            backup: null
+        };
+        
+        // Event emitter for save events
+        this.events = new Map();
+    }
+    
+    async initialize() {
+        console.log('💾 Save Manager initializing...');
+        
+        // Initialize backends
+        await this.initializeBackends();
+        
+        // Load current save
+        await this.loadGame();
+        
+        // Start auto-save
+        if (this.config.autoSaveEnabled) {
+            this.startAutoSave();
+        }
+        
+        // Start cloud sync
+        if (this.config.cloudSyncEnabled) {
+            this.startCloudSync();
+        }
+        
+        // Start backup
+        if (this.config.backupEnabled) {
+            this.startBackup();
+        }
+        
+        // Set up event listeners
+        this.setupEventListeners();
+        
+        console.log('✅ Save Manager ready');
+    }
+    
+    async initializeBackends() {
+        for (const backendName of this.config.backends) {
+            const backend = this.backends[backendName];
+            if (backend) {
+                try {
+                    await backend.initialize();
+                    console.log(`✅ ${backendName} backend initialized`);
+                } catch (error) {
+                    console.error(`❌ Failed to initialize ${backendName}:`, error);
+                }
+            }
+        }
+    }
+    
+    // Save game
+    async save(slot = this.config.currentSlot) {
+        if (this.saveState.saveInProgress) {
+            console.log('Save already in progress');
+            return false;
+        }
+        
+        this.saveState.saveInProgress = true;
+        this.emit('save:start');
+        
+        try {
+            // Collect save data
+            const saveData = this.collectSaveData();
+            
+            // Validate
+            if (this.config.validateOnSave && !this.validateSaveData(saveData)) {
+                throw new Error('Save data validation failed');
+            }
+            
+            // Add metadata
+            saveData.metadata = {
+                ...this.metadata,
+                timestamp: Date.now(),
+                playTime: this.game.state.totalPlayTime,
+                slot
+            };
+            
+            // Compress if needed
+            const processedData = await this.processSaveData(saveData);
+            
+            // Save to backends
+            const success = await this.saveToBackends(processedData, slot);
+            
+            if (success) {
+                this.saveState.lastSaveTime = Date.now();
+                this.emit('save:success', { slot, timestamp: Date.now() });
+                
+                // Show save indicator
+                this.game.ui.showSaveIndicator();
+                
+                return true;
+            } else {
+                throw new Error('Failed to save to any backend');
+            }
+            
+        } catch (error) {
+            console.error('Save failed:', error);
+            this.emit('save:error', error);
+            
+            // Queue for later if offline
+            if (this.isOffline()) {
+                this.queueSave(saveData);
+            }
+            
+            return false;
+            
+        } finally {
+            this.saveState.saveInProgress = false;
+        }
+    }
+    
+    // Load game
+    async load(slot = this.config.currentSlot) {
+        this.emit('load:start');
+        
+        try {
+            // Try loading from backends in priority order
+            let saveData = null;
+            
+            for (const backendName of this.config.backends) {
+                const backend = this.backends[backendName];
+                if (backend && backend.isAvailable()) {
+                    try {
+                        const data = await backend.load(`save_${slot}`);
+                        if (data) {
+                            saveData = await this.processSaveData(data, true);
+                            console.log(`Loaded from ${backendName}`);
+                            break;
+                        }
+                    } catch (error) {
+                        console.error(`Failed to load from ${backendName}:`, error);
+                    }
+                }
+            }
+            
+            if (!saveData) {
+                console.log('No save data found');
+                this.emit('load:empty');
+                return false;
+            }
+            
+            // Validate
+            if (this.config.validateOnLoad && !this.validateSaveData(saveData)) {
+                throw new Error('Save data validation failed');
+            }
+            
+            // Check version compatibility
+            if (!this.checkVersionCompatibility(saveData)) {
+                // Attempt migration
+                saveData = await this.migrateSaveData(saveData);
+            }
+            
+            // Apply save data
+            this.applySaveData(saveData);
+            
+            this.emit('load:success', { slot, timestamp: saveData.metadata?.timestamp });
+            return true;
+            
+        } catch (error) {
+            console.error('Load failed:', error);
+            this.emit('load:error', error);
+            
+            // Attempt recovery
+            return this.attemptRecovery();
+        }
+    }
+    
+    // Collect save data from all game systems
+    collectSaveData() {
+        const saveData = {
+            // Core state
+            state: this.game.stateManager.getSnapshot(),
+            
+            // System save data
+            progression: this.game.progression.getSaveData(),
+            prestige: this.game.prestige.getSaveData(),
+            achievements: this.game.achievements.getSaveData(),
+            streaks: this.game.streaks.getSaveData(),
+            events: this.game.events.getSaveData(),
+            shop: this.game.shop.getSaveData(),
+            ads: this.game.ads.getSaveData(),
+            
+            // Psychology systems
+            dopamine: this.game.dopamine.getState(),
+            flowState: this.game.flowState.getState(),
+            
+            // Settings
+            settings: {
+                musicEnabled: this.game.music.enabled,
+                soundEnabled: this.game.music.soundEnabled,
+                notificationsEnabled: this.game.notifications?.enabled
+            }
+        };
+        
+        return saveData;
+    }
+    
+    // Apply save data to game systems
+    applySaveData(saveData) {
+        // Restore state
+        if (saveData.state) {
+            this.game.stateManager.restoreSnapshot(saveData.state);
+        }
+        
+        // Restore systems
+        if (saveData.progression) {
+            this.game.progression.loadSaveData(saveData.progression);
+        }
+        
+        if (saveData.prestige) {
+            this.game.prestige.loadSaveData(saveData.prestige);
+        }
+        
+        if (saveData.achievements) {
+            this.game.achievements.loadSaveData(saveData.achievements);
+        }
+        
+        if (saveData.streaks) {
+            this.game.streaks.loadSaveData(saveData.streaks);
+        }
+        
+        if (saveData.events) {
+            this.game.events.loadSaveData(saveData.events);
+        }
+        
+        if (saveData.shop) {
+            this.game.shop.loadSaveData(saveData.shop);
+        }
+        
+        if (saveData.ads) {
+            this.game.ads.loadSaveData(saveData.ads);
+        }
+        
+        // Restore settings
+        if (saveData.settings) {
+            this.applySettings(saveData.settings);
+        }
+        
+        // Calculate offline progress
+        if (saveData.metadata?.timestamp) {
+            const offlineTime = Date.now() - saveData.metadata.timestamp;
+            this.game.calculateOfflineProgress(offlineTime);
+        }
+    }
+    
+    // Process save data (compress/encrypt)
+    async processSaveData(data, decompress = false) {
+        let processed = data;
+        
+        // Convert to JSON string
+        if (!decompress) {
+            processed = JSON.stringify(data);
+        }
+        
+        // Compression
+        if (this.config.compressionEnabled) {
+            if (decompress) {
+                processed = await this.decompress(processed);
+                processed = JSON.parse(processed);
+            } else if (processed.length > this.config.compressionThreshold) {
+                processed = await this.compress(processed);
+            }
+        }
+        
+        // Encryption
+        if (this.config.encryptionEnabled && this.config.encryptionKey) {
+            if (decompress) {
+                processed = await this.decrypt(processed);
+            } else {
+                processed = await this.encrypt(processed);
+            }
+        }
+        
+        return processed;
+    }
+    
+    // Save to all available backends
+    async saveToBackends(data, slot) {
+        const results = [];
+        
+        for (const backendName of this.config.backends) {
+            const backend = this.backends[backendName];
+            if (backend && backend.isAvailable()) {
+                try {
+                    await backend.save(`save_${slot}`, data);
+                    results.push(true);
+                    
+                    // If cloud save succeeded, mark for sync
+                    if (backendName === 'cloud') {
+                        this.saveState.lastSyncTime = Date.now();
+                    }
+                } catch (error) {
+                    console.error(`Failed to save to ${backendName}:`, error);
+                    results.push(false);
+                }
+            }
+        }
+        
+        // Return true if at least one backend succeeded
+        return results.some(r => r === true);
+    }
+    
+    // Cloud sync
+    async syncToCloud() {
+        if (this.saveState.syncInProgress || !this.config.cloudSyncEnabled) {
+            return false;
+        }
+        
+        this.saveState.syncInProgress = true;
+        this.emit('sync:start');
+        
+        try {
+            const cloudBackend = this.backends.cloud;
+            if (!cloudBackend || !cloudBackend.isAvailable()) {
+                throw new Error('Cloud backend not available');
+            }
+            
+            // Get latest save data
+            const saveData = this.collectSaveData();
+            const processedData = await this.processSaveData(saveData);
+            
+            // Upload to cloud
+            await cloudBackend.save(`save_${this.config.currentSlot}`, processedData);
+            
+            // Upload metadata
+            await cloudBackend.save('save_metadata', {
+                slots: this.getSlotsMetadata(),
+                lastSync: Date.now()
+            });
+            
+            this.saveState.lastSyncTime = Date.now();
+            this.saveState.pendingSync = false;
+            
+            this.emit('sync:success');
+            return true;
+            
+        } catch (error) {
+            console.error('Cloud sync failed:', error);
+            this.emit('sync:error', error);
+            this.saveState.pendingSync = true;
+            return false;
+            
+        } finally {
+            this.saveState.syncInProgress = false;
+        }
+    }
+    
+    // Get save slots metadata
+    getSlotsMetadata() {
+        const metadata = [];
+        
+        for (let i = 0; i < this.config.maxSaveSlots; i++) {
+            // Try to get save info from local storage
+            const key = `save_${i}_meta`;
+            const meta = localStorage.getItem(key);
+            
+            if (meta) {
+                metadata.push(JSON.parse(meta));
+            } else {
+                metadata.push({
+                    slot: i,
+                    empty: true
+                });
+            }
+        }
+        
+        return metadata;
+    }
+    
+    // Save slot management
+    async saveToSlot(slot) {
+        if (slot < 0 || slot >= this.config.maxSaveSlots) {
+            throw new Error('Invalid save slot');
+        }
+        
+        this.config.currentSlot = slot;
+        return this.save(slot);
+    }
+    
+    async loadFromSlot(slot) {
+        if (slot < 0 || slot >= this.config.maxSaveSlots) {
+            throw new Error('Invalid save slot');
+        }
+        
+        this.config.currentSlot = slot;
+        return this.load(slot);
+    }
+    
+    async deleteSlot(slot) {
+        // Delete from all backends
+        for (const backendName of this.config.backends) {
+            const backend = this.backends[backendName];
+            if (backend && backend.isAvailable()) {
+                try {
+                    await backend.delete(`save_${slot}`);
+                } catch (error) {
+                    console.error(`Failed to delete from ${backendName}:`, error);
+                }
+            }
+        }
+        
+        // Delete metadata
+        localStorage.removeItem(`save_${slot}_meta`);
+        
+        this.emit('slot:deleted', slot);
+    }
+    
+    // Backup management
+    async createBackup() {
+        const saveData = this.collectSaveData();
+        const timestamp = Date.now();
+        const backupKey = `backup_${timestamp}`;
+        
+        try {
+            // Save backup to IndexedDB (more space than localStorage)
+            const idbBackend = this.backends.indexeddb;
+            if (idbBackend && idbBackend.isAvailable()) {
+                await idbBackend.save(backupKey, saveData);
+                
+                // Maintain backup list
+                await this.maintainBackupList(backupKey);
+                
+                this.saveState.lastBackupTime = timestamp;
+                this.emit('backup:created', timestamp);
+                
+                return true;
+            }
+        } catch (error) {
+            console.error('Backup failed:', error);
+            return false;
+        }
+    }
+    
+    async maintainBackupList(newBackupKey) {
+        // Get existing backups
+        const backups = await this.getBackupList();
+        backups.push(newBackupKey);
+        
+        // Remove old backups if exceeded max
+        if (backups.length > this.config.maxBackups) {
+            const toDelete = backups.shift(); // Remove oldest
+            const idbBackend = this.backends.indexeddb;
+            if (idbBackend) {
+                await idbBackend.delete(toDelete);
+            }
+        }
+        
+        // Save updated list
+        localStorage.setItem('backup_list', JSON.stringify(backups));
+    }
+    
+    async getBackupList() {
+        const saved = localStorage.getItem('backup_list');
+        return saved ? JSON.parse(saved) : [];
+    }
+    
+    async restoreFromBackup(timestamp) {
+        const backupKey = `backup_${timestamp}`;
+        const idbBackend = this.backends.indexeddb;
+        
+        if (!idbBackend || !idbBackend.isAvailable()) {
+            throw new Error('Backup storage not available');
+        }
+        
+        try {
+            const backupData = await idbBackend.load(backupKey);
+            if (backupData) {
+                this.applySaveData(backupData);
+                this.emit('backup:restored', timestamp);
+                return true;
+            }
+        } catch (error) {
+            console.error('Backup restore failed:', error);
+            throw error;
+        }
+        
+        return false;
+    }
+    
+    // Import/Export
+    async exportSave() {
+        const saveData = this.collectSaveData();
+        const processed = await this.processSaveData(saveData);
+        
+        // Convert to base64 for easy sharing
+        const base64 = btoa(processed);
+        
+        // Create download
+        const blob = new Blob([base64], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `evergrow_save_${Date.now()}.txt`;
+        a.click();
+        
+        URL.revokeObjectURL(url);
+        
+        this.emit('save:exported');
+        return base64;
+    }
+    
+    async importSave(base64Data) {
+        try {
+            // Decode from base64
+            const processed = atob(base64Data);
+            const saveData = await this.processSaveData(processed, true);
+            
+            // Validate
+            if (!this.validateSaveData(saveData)) {
+                throw new Error('Invalid save data');
+            }
+            
+            // Apply
+            this.applySaveData(saveData);
+            
+            // Save to current slot
+            await this.save();
+            
+            this.emit('save:imported');
+            return true;
+            
+        } catch (error) {
+            console.error('Import failed:', error);
+            this.emit('import:error', error);
+            return false;
+        }
+    }
+    
+    // Validation
+    validateSaveData(saveData) {
+        // Check required fields
+        if (!saveData || typeof saveData !== 'object') {
+            return false;
+        }
+        
+        // Check for save data tampering
+        if (saveData.state) {
+            // Basic sanity checks
+            if (saveData.state.currency < 0 || 
+                saveData.state.prestigeLevel < 0 ||
+                saveData.state.currency > Number.MAX_SAFE_INTEGER) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    // Version compatibility
+    checkVersionCompatibility(saveData) {
+        const saveVersion = saveData.metadata?.version || '0.0.0';
+        const currentVersion = this.metadata.version;
+        
+        // Simple version comparison
+        return saveVersion === currentVersion;
+    }
+    
+    async migrateSaveData(saveData) {
+        const saveVersion = saveData.metadata?.version || '0.0.0';
+        console.log(`Migrating save from ${saveVersion} to ${this.metadata.version}`);
+        
+        // Add migration logic here based on version differences
+        
+        // Update version
+        if (saveData.metadata) {
+            saveData.metadata.version = this.metadata.version;
+        }
+        
+        return saveData;
+    }
+    
+    // Recovery
+    async attemptRecovery() {
+        console.log('Attempting save recovery...');
+        
+        // Try loading from backup
+        const backups = await this.getBackupList();
+        if (backups.length > 0) {
+            const latestBackup = backups[backups.length - 1];
+            const timestamp = latestBackup.replace('backup_', '');
+            
+            try {
+                await this.restoreFromBackup(timestamp);
+                console.log('Recovered from backup');
+                return true;
+            } catch (error) {
+                console.error('Backup recovery failed:', error);
+            }
+        }
+        
+        // Last resort: reset to new game
+        console.log('No recovery possible, starting fresh');
+        return false;
+    }
+    
+    // Timers
+    startAutoSave() {
+        this.timers.autoSave = setInterval(() => {
+            this.save();
+        }, this.config.autoSaveInterval);
+    }
+    
+    stopAutoSave() {
+        if (this.timers.autoSave) {
+            clearInterval(this.timers.autoSave);
+            this.timers.autoSave = null;
+        }
+    }
+    
+    startCloudSync() {
+        this.timers.cloudSync = setInterval(() => {
+            if (this.saveState.pendingSync || 
+                Date.now() - this.saveState.lastSyncTime > this.config.syncInterval) {
+                this.syncToCloud();
+            }
+        }, this.config.syncInterval);
+    }
+    
+    stopCloudSync() {
+        if (this.timers.cloudSync) {
+            clearInterval(this.timers.cloudSync);
+            this.timers.cloudSync = null;
+        }
+    }
+    
+    startBackup() {
+        this.timers.backup = setInterval(() => {
+            this.createBackup();
+        }, this.config.backupInterval);
+    }
+    
+    stopBackup() {
+        if (this.timers.backup) {
+            clearInterval(this.timers.backup);
+            this.timers.backup = null;
+        }
+    }
+    
+    // Event handling
+    on(event, callback) {
+        if (!this.events.has(event)) {
+            this.events.set(event, new Set());
+        }
+        this.events.get(event).add(callback);
+    }
+    
+    off(event, callback) {
+        const callbacks = this.events.get(event);
+        if (callbacks) {
+            callbacks.delete(callback);
+        }
+    }
+    
+    emit(event, data) {
+        const callbacks = this.events.get(event);
+        if (callbacks) {
+            callbacks.forEach(callback => {
+                try {
+                    callback(data);
+                } catch (error) {
+                    console.error(`Event handler error for ${event}:`, error);
+                }
+            });
+        }
+    }
+    
+    // Utility methods
+    detectPlatform() {
+        if (window.cordova) return 'cordova';
+        if (window.electron) return 'electron';
+        if (window.navigator.standalone) return 'pwa';
+        return 'web';
+    }
+    
+    getDeviceInfo() {
+        return {
+            userAgent: navigator.userAgent,
+            language: navigator.language,
+            platform: navigator.platform,
+            vendor: navigator.vendor
+        };
+    }
+    
+    isOffline() {
+        return !navigator.onLine;
+    }
+    
+    applySettings(settings) {
+        if (settings.musicEnabled !== undefined) {
+            this.game.music.enabled = settings.musicEnabled;
+        }
+        
+        if (settings.soundEnabled !== undefined) {
+            this.game.music.soundEnabled = settings.soundEnabled;
+        }
+        
+        if (settings.notificationsEnabled !== undefined && this.game.notifications) {
+            this.game.notifications.enabled = settings.notificationsEnabled;
+        }
+    }
+    
+    async compress(data) {
+        // Simple compression using browser API if available
+        if ('CompressionStream' in window) {
+            const stream = new CompressionStream('gzip');
+            const writer = stream.writable.getWriter();
+            writer.write(new TextEncoder().encode(data));
+            writer.close();
+            
+            const compressed = await new Response(stream.readable).arrayBuffer();
+            return new Uint8Array(compressed);
+        }
+        
+        // Fallback: no compression
+        return data;
+    }
+    
+    async decompress(data) {
+        // Decompress if browser API available
+        if ('DecompressionStream' in window && data instanceof Uint8Array) {
+            const stream = new DecompressionStream('gzip');
+            const writer = stream.writable.getWriter();
+            writer.write(data);
+            writer.close();
+            
+            const decompressed = await new Response(stream.readable).text();
+            return decompressed;
+        }
+        
+        // Fallback: assume uncompressed
+        return data;
+    }
+    
+    async encrypt(data) {
+        // Simple XOR encryption (not secure, just obfuscation)
+        if (!this.config.encryptionKey) return data;
+        
+        const key = this.config.encryptionKey;
+        let encrypted = '';
+        
+        for (let i = 0; i < data.length; i++) {
+            encrypted += String.fromCharCode(
+                data.charCodeAt(i) ^ key.charCodeAt(i % key.length)
+            );
+        }
+        
+        return btoa(encrypted); // Base64 encode
+    }
+    
+    async decrypt(data) {
+        // Decrypt XOR encryption
+        if (!this.config.encryptionKey) return data;
+        
+        const key = this.config.encryptionKey;
+        const decoded = atob(data); // Base64 decode
+        let decrypted = '';
+        
+        for (let i = 0; i < decoded.length; i++) {
+            decrypted += String.fromCharCode(
+                decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length)
+            );
+        }
+        
+        return decrypted;
+    }
+    
+    queueSave(saveData) {
+        this.saveQueue.push({
+            data: saveData,
+            timestamp: Date.now()
+        });
+        
+        // Register for background sync if available
+        if ('serviceWorker' in navigator && 'sync' in self.registration) {
+            self.registration.sync.register('sync-game-state');
+        }
+    }
+    
+    setupEventListeners() {
+        // Listen for online/offline events
+        window.addEventListener('online', () => {
+            if (this.saveState.pendingSync) {
+                this.syncToCloud();
+            }
+        });
+        
+        window.addEventListener('beforeunload', () => {
+            // Final save before closing
+            this.save();
+        });
+    }
+}
+
+// Storage backend implementations
+class LocalStorageBackend {
+    isAvailable() {
+        try {
+            const test = '__localStorage_test__';
+            localStorage.setItem(test, test);
+            localStorage.removeItem(test);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    async initialize() {
+        // No initialization needed
+    }
+    
+    async save(key, data) {
+        localStorage.setItem(key, JSON.stringify(data));
+    }
+    
+    async load(key) {
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : null;
+    }
+    
+    async delete(key) {
+        localStorage.removeItem(key);
+    }
+}
+
+class IndexedDBBackend {
+    constructor() {
+        this.db = null;
+        this.dbName = 'evergrow_saves';
+        this.version = 1;
+    }
+    
+    isAvailable() {
+        return 'indexedDB' in window;
+    }
+    
+    async initialize() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, this.version);
+            
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                this.db = request.result;
+                resolve();
+            };
+            
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains('saves')) {
+                    db.createObjectStore('saves');
+                }
+            };
+        });
+    }
+    
+    async save(key, data) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['saves'], 'readwrite');
+            const store = transaction.objectStore('saves');
+            const request = store.put(data, key);
+            
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+    
+    async load(key) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['saves'], 'readonly');
+            const store = transaction.objectStore('saves');
+            const request = store.get(key);
+            
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+    
+    async delete(key) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['saves'], 'readwrite');
+            const store = transaction.objectStore('saves');
+            const request = store.delete(key);
+            
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+}
+
+class CloudBackend {
+    constructor(provider) {
+        this.provider = provider;
+        this.initialized = false;
+    }
+    
+    isAvailable() {
+        return this.initialized && navigator.onLine;
+    }
+    
+    async initialize() {
+        // Initialize based on provider
+        // This would integrate with Firebase, PlayFab, etc.
+        this.initialized = true;
+    }
+    
+    async save(key, data) {
+        // Implement cloud save
+        console.log('Cloud save:', key);
+    }
+    
+    async load(key) {
+        // Implement cloud load
+        console.log('Cloud load:', key);
+        return null;
+    }
+    
+    async delete(key) {
+        // Implement cloud delete
+        console.log('Cloud delete:', key);
+    }
+}
+
+export default SaveManager;

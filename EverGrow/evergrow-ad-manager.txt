@@ -1,0 +1,738 @@
+// AdManager.js
+// Manages rewarded video ads with psychological timing
+// Implements optimal ad placement for retention and monetization
+
+class AdManager {
+    constructor(game) {
+        this.game = game;
+        
+        // Ad configuration
+        this.config = {
+            // Ad frequency limits
+            minTimeBetweenAds: 180000, // 3 minutes
+            maxAdsPerSession: 10,
+            maxAdsPerDay: 30,
+            
+            // Reward multipliers
+            baseRewardMultiplier: 5, // 5x currency per second
+            bonusChance: 0.2, // 20% chance for bonus
+            bonusMultiplier: 2, // Double reward on bonus
+            
+            // Psychological timing
+            optimalAdMoments: {
+                afterPrestige: true,
+                beforeUpgrade: true,
+                streakAtRisk: true,
+                eventBonus: true,
+                offlineReturn: true
+            },
+            
+            // Ad types and purposes
+            adTypes: {
+                rewardedVideo: {
+                    duration: 30000, // 30 seconds
+                    skippable: false,
+                    providers: ['admob', 'unity', 'ironsource']
+                },
+                interstitial: {
+                    duration: 15000, // 15 seconds
+                    skippable: true,
+                    cooldown: 600000 // 10 minutes
+                },
+                banner: {
+                    positions: ['bottom'],
+                    refresh: 60000 // 1 minute
+                }
+            },
+            
+            // Platform detection
+            platforms: {
+                web: ['adsense', 'playwire'],
+                ios: ['admob', 'unity'],
+                android: ['admob', 'applovin', 'unity']
+            }
+        };
+        
+        // Ad purposes with rewards
+        this.adPurposes = {
+            double_offline: {
+                name: 'Double Offline Earnings',
+                icon: '⏰',
+                description: 'Double your earnings while away!',
+                rewardType: 'multiplier',
+                rewardValue: 2,
+                duration: 'one_time'
+            },
+            
+            instant_reward: {
+                name: 'Instant Growth',
+                icon: '💰',
+                description: 'Get 5 minutes of production instantly!',
+                rewardType: 'currency',
+                rewardValue: () => this.game.state.currencyPerSecond * 300,
+                duration: 'immediate'
+            },
+            
+            streak_protection: {
+                name: 'Protect Your Streak',
+                icon: '🛡️',
+                description: 'Don\'t lose your {days} day streak!',
+                rewardType: 'streak_save',
+                rewardValue: 1,
+                duration: '24_hours',
+                urgency: 'high'
+            },
+            
+            speed_boost: {
+                name: 'Speed Boost',
+                icon: '⚡',
+                description: '2x production speed for 10 minutes!',
+                rewardType: 'boost',
+                rewardValue: 2,
+                duration: 600000 // 10 minutes
+            },
+            
+            extra_prestige: {
+                name: 'Bonus Prestige Points',
+                icon: '✨',
+                description: '50% more prestige points!',
+                rewardType: 'prestige_bonus',
+                rewardValue: 1.5,
+                duration: 'next_prestige'
+            },
+            
+            event_bonus: {
+                name: 'Event Bonus',
+                icon: '🎉',
+                description: 'Double event rewards!',
+                rewardType: 'event_multiplier',
+                rewardValue: 2,
+                duration: 'current_event'
+            },
+            
+            premium_currency: {
+                name: 'Free Gems',
+                icon: '💎',
+                description: 'Earn 10 premium gems!',
+                rewardType: 'gems',
+                rewardValue: 10,
+                duration: 'immediate',
+                dailyLimit: 3
+            },
+            
+            skip_time: {
+                name: 'Time Warp',
+                icon: '🕐',
+                description: 'Skip ahead 1 hour!',
+                rewardType: 'time_skip',
+                rewardValue: 3600, // 1 hour in seconds
+                duration: 'immediate'
+            },
+            
+            unlock_upgrade: {
+                name: 'Unlock Next Upgrade',
+                icon: '🔓',
+                description: 'Instantly unlock your next upgrade!',
+                rewardType: 'unlock',
+                rewardValue: 'next_upgrade',
+                duration: 'immediate'
+            }
+        };
+        
+        // Ad state tracking
+        this.adState = {
+            adsWatchedSession: 0,
+            adsWatchedToday: 0,
+            lastAdTime: 0,
+            activeBoosts: new Map(),
+            dailyLimits: new Map(),
+            
+            // Platform SDK states
+            sdkInitialized: false,
+            sdkReady: false,
+            adLoaded: false,
+            adShowing: false
+        };
+        
+        // Analytics
+        this.analytics = {
+            totalAdsWatched: 0,
+            adRevenue: 0,
+            completionRate: 0,
+            popularPurposes: {},
+            averageWatchTime: 0,
+            clickThroughRate: 0
+        };
+        
+        // Ad providers
+        this.providers = {
+            current: null,
+            fallback: []
+        };
+        
+        // Disabled state for VIP
+        this.disabled = false;
+    }
+    
+    async initialize() {
+        console.log('📺 Ad Manager initializing...');
+        
+        // Check if ads are disabled (VIP)
+        if (this.game.state.subscription?.active && 
+            this.game.state.subscription.benefits.noAds) {
+            this.disable();
+            return;
+        }
+        
+        // Detect platform
+        const platform = this.detectPlatform();
+        
+        // Initialize appropriate SDKs
+        await this.initializeSDKs(platform);
+        
+        // Load ad state
+        this.loadAdState();
+        
+        // Reset daily limits at midnight
+        this.scheduleDailyReset();
+        
+        // Preload first ad
+        if (this.adState.sdkReady) {
+            this.preloadAd();
+        }
+        
+        console.log('✅ Ad Manager ready');
+    }
+    
+    detectPlatform() {
+        if (window.cordova || window.phonegap) {
+            return window.device?.platform?.toLowerCase() || 'android';
+        }
+        return 'web';
+    }
+    
+    async initializeSDKs(platform) {
+        const providers = this.config.platforms[platform];
+        if (!providers || providers.length === 0) {
+            console.warn('No ad providers for platform:', platform);
+            return;
+        }
+        
+        // Try to initialize each provider
+        for (const provider of providers) {
+            try {
+                await this.initializeProvider(provider);
+                this.providers.current = provider;
+                this.providers.fallback = providers.filter(p => p !== provider);
+                this.adState.sdkInitialized = true;
+                this.adState.sdkReady = true;
+                break;
+            } catch (error) {
+                console.error(`Failed to initialize ${provider}:`, error);
+            }
+        }
+    }
+    
+    async initializeProvider(provider) {
+        switch (provider) {
+            case 'admob':
+                return this.initializeAdMob();
+            case 'unity':
+                return this.initializeUnityAds();
+            case 'adsense':
+                return this.initializeAdSense();
+            default:
+                throw new Error(`Unknown provider: ${provider}`);
+        }
+    }
+    
+    async initializeAdMob() {
+        // AdMob initialization (example)
+        if (!window.admob) {
+            throw new Error('AdMob SDK not found');
+        }
+        
+        await window.admob.start();
+        
+        // Configure with app IDs
+        window.admob.configure({
+            appId: {
+                android: 'ca-app-pub-xxxxx',
+                ios: 'ca-app-pub-xxxxx'
+            },
+            rewardVideo: {
+                id: {
+                    android: 'ca-app-pub-xxxxx/xxxxx',
+                    ios: 'ca-app-pub-xxxxx/xxxxx'
+                }
+            }
+        });
+    }
+    
+    async showRewardedVideo(purpose) {
+        // Check if ads are disabled
+        if (this.disabled) {
+            this.game.ui.showMessage('Ads disabled with VIP!');
+            return null;
+        }
+        
+        // Check frequency limits
+        if (!this.canShowAd()) {
+            this.game.ui.showMessage('Please wait before watching another ad');
+            return null;
+        }
+        
+        // Check daily limits for specific purposes
+        if (!this.checkDailyLimit(purpose)) {
+            this.game.ui.showMessage('Daily limit reached for this reward');
+            return null;
+        }
+        
+        const adConfig = this.adPurposes[purpose];
+        if (!adConfig) {
+            console.error('Invalid ad purpose:', purpose);
+            return null;
+        }
+        
+        // Show ad loading UI
+        this.game.ui.showAdLoading();
+        
+        try {
+            // Check if ad is ready
+            if (!this.adState.adLoaded) {
+                await this.loadAd();
+            }
+            
+            // Show the ad
+            const result = await this.displayAd(adConfig);
+            
+            if (result.completed) {
+                // Grant reward
+                const reward = this.grantReward(purpose, adConfig);
+                
+                // Update state
+                this.updateAdState();
+                
+                // Analytics
+                this.trackAdCompletion(purpose, result);
+                
+                // Preload next ad
+                this.preloadAd();
+                
+                return reward;
+            } else {
+                // Ad skipped or failed
+                this.game.ui.showMessage('Ad not completed');
+                return null;
+            }
+            
+        } catch (error) {
+            console.error('Ad error:', error);
+            this.handleAdError(error);
+            return null;
+        }
+    }
+    
+    canShowAd() {
+        const now = Date.now();
+        
+        // Check minimum time between ads
+        if (now - this.adState.lastAdTime < this.config.minTimeBetweenAds) {
+            return false;
+        }
+        
+        // Check session limit
+        if (this.adState.adsWatchedSession >= this.config.maxAdsPerSession) {
+            return false;
+        }
+        
+        // Check daily limit
+        if (this.adState.adsWatchedToday >= this.config.maxAdsPerDay) {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    checkDailyLimit(purpose) {
+        const adConfig = this.adPurposes[purpose];
+        if (!adConfig.dailyLimit) return true;
+        
+        const watched = this.adState.dailyLimits.get(purpose) || 0;
+        return watched < adConfig.dailyLimit;
+    }
+    
+    async loadAd() {
+        // Platform-specific ad loading
+        return new Promise((resolve, reject) => {
+            // Simulate ad loading
+            setTimeout(() => {
+                if (Math.random() > 0.1) {
+                    this.adState.adLoaded = true;
+                    resolve();
+                } else {
+                    reject(new Error('No ads available'));
+                }
+            }, 1000);
+        });
+    }
+    
+    async displayAd(adConfig) {
+        this.adState.adShowing = true;
+        
+        // Pause game
+        this.game.pause();
+        
+        // Show ad UI overlay
+        this.game.ui.showAdOverlay(adConfig);
+        
+        return new Promise((resolve) => {
+            // Simulate ad playback
+            const duration = this.config.adTypes.rewardedVideo.duration;
+            const startTime = Date.now();
+            
+            // Create skip button if allowed
+            let skipped = false;
+            if (this.config.adTypes.rewardedVideo.skippable) {
+                setTimeout(() => {
+                    this.game.ui.showAdSkipButton(() => {
+                        skipped = true;
+                        this.completeAd(resolve, startTime, skipped);
+                    });
+                }, 5000); // Show skip after 5 seconds
+            }
+            
+            // Auto-complete after duration
+            setTimeout(() => {
+                if (!skipped) {
+                    this.completeAd(resolve, startTime, false);
+                }
+            }, duration);
+        });
+    }
+    
+    completeAd(resolve, startTime, skipped) {
+        const watchTime = Date.now() - startTime;
+        
+        this.adState.adShowing = false;
+        this.adState.adLoaded = false;
+        
+        // Resume game
+        this.game.resume();
+        
+        // Hide ad overlay
+        this.game.ui.hideAdOverlay();
+        
+        resolve({
+            completed: !skipped,
+            watchTime,
+            skipped
+        });
+    }
+    
+    grantReward(purpose, adConfig) {
+        const reward = {
+            type: adConfig.rewardType,
+            value: typeof adConfig.rewardValue === 'function' ? 
+                adConfig.rewardValue() : adConfig.rewardValue,
+            duration: adConfig.duration,
+            purpose
+        };
+        
+        switch (adConfig.rewardType) {
+            case 'currency':
+                this.game.addCurrency(reward.value);
+                break;
+                
+            case 'multiplier':
+                this.applyMultiplier(reward.value, adConfig.duration);
+                break;
+                
+            case 'streak_save':
+                this.game.streaks.protectStreak();
+                break;
+                
+            case 'boost':
+                this.activateBoost(purpose, reward.value, adConfig.duration);
+                break;
+                
+            case 'prestige_bonus':
+                this.game.prestige.setNextPrestigeBonus(reward.value);
+                break;
+                
+            case 'event_multiplier':
+                this.game.events.applyEventMultiplier(reward.value);
+                break;
+                
+            case 'gems':
+                this.game.state.premiumCurrency += reward.value;
+                this.game.ui.updatePremiumCurrency();
+                break;
+                
+            case 'time_skip':
+                this.game.skipTime(reward.value);
+                break;
+                
+            case 'unlock':
+                this.unlockNextUpgrade();
+                break;
+        }
+        
+        // Show reward notification
+        this.game.ui.showAdReward(reward, adConfig);
+        
+        // Trigger dopamine response
+        this.game.dopamine.triggerAdReward(reward);
+        
+        return reward;
+    }
+    
+    applyMultiplier(value, duration) {
+        if (duration === 'one_time') {
+            // Apply to current earnings only
+            const earnings = this.game.state.currency;
+            this.game.addCurrency(earnings * (value - 1));
+        } else {
+            // Temporary multiplier
+            this.game.progression.addTemporaryMultiplier('ad_boost', value, duration / 1000);
+        }
+    }
+    
+    activateBoost(type, value, duration) {
+        const boost = {
+            type,
+            value,
+            startTime: Date.now(),
+            endTime: Date.now() + duration
+        };
+        
+        this.adState.activeBoosts.set(type, boost);
+        
+        // Apply boost effect
+        this.game.progression.addTemporaryMultiplier(`ad_${type}`, value, duration / 1000);
+        
+        // Schedule removal
+        setTimeout(() => {
+            this.adState.activeBoosts.delete(type);
+        }, duration);
+    }
+    
+    unlockNextUpgrade() {
+        const nextUpgrade = this.game.progression.getNextLockedUpgrade();
+        if (nextUpgrade) {
+            nextUpgrade.unlocked = true;
+            this.game.ui.showUpgradeUnlocked(nextUpgrade);
+        }
+    }
+    
+    updateAdState() {
+        const now = Date.now();
+        
+        this.adState.lastAdTime = now;
+        this.adState.adsWatchedSession++;
+        this.adState.adsWatchedToday++;
+        
+        this.analytics.totalAdsWatched++;
+    }
+    
+    trackAdCompletion(purpose, result) {
+        // Update purpose statistics
+        this.analytics.popularPurposes[purpose] = 
+            (this.analytics.popularPurposes[purpose] || 0) + 1;
+        
+        // Update completion rate
+        const totalAttempts = this.analytics.totalAdsWatched + 
+            (this.analytics.totalAdsWatched / (this.analytics.completionRate || 1) - 
+             this.analytics.totalAdsWatched);
+        
+        this.analytics.completionRate = 
+            this.analytics.totalAdsWatched / totalAttempts;
+        
+        // Track to analytics service
+        this.game.analytics.track('ad_completed', {
+            purpose,
+            watchTime: result.watchTime,
+            completed: result.completed,
+            reward: this.adPurposes[purpose].rewardType
+        });
+    }
+    
+    handleAdError(error) {
+        console.error('Ad error:', error);
+        
+        // Try fallback provider
+        if (this.providers.fallback.length > 0) {
+            const nextProvider = this.providers.fallback.shift();
+            console.log('Trying fallback provider:', nextProvider);
+            this.initializeProvider(nextProvider)
+                .then(() => this.preloadAd())
+                .catch(e => console.error('Fallback failed:', e));
+        }
+        
+        // Show error to user
+        this.game.ui.showMessage('Ad not available right now');
+    }
+    
+    preloadAd() {
+        // Preload next ad in background
+        if (this.adState.sdkReady && !this.adState.adLoaded) {
+            this.loadAd().catch(() => {
+                // Retry in 30 seconds
+                setTimeout(() => this.preloadAd(), 30000);
+            });
+        }
+    }
+    
+    scheduleDailyReset() {
+        const now = new Date();
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        
+        const msUntilReset = tomorrow - now;
+        
+        setTimeout(() => {
+            this.resetDailyLimits();
+            this.scheduleDailyReset(); // Schedule next reset
+        }, msUntilReset);
+    }
+    
+    resetDailyLimits() {
+        this.adState.adsWatchedToday = 0;
+        this.adState.dailyLimits.clear();
+        
+        console.log('Ad daily limits reset');
+    }
+    
+    disable() {
+        this.disabled = true;
+        console.log('Ads disabled (VIP active)');
+        
+        // Remove any banner ads
+        this.removeBanners();
+    }
+    
+    enable() {
+        this.disabled = false;
+        console.log('Ads enabled');
+        
+        // Reinitialize if needed
+        if (!this.adState.sdkInitialized) {
+            this.initialize();
+        }
+    }
+    
+    removeBanners() {
+        // Remove any banner ads from UI
+        const banners = document.querySelectorAll('.ad-banner');
+        banners.forEach(banner => banner.remove());
+    }
+    
+    // Special ad opportunities
+    offerDoubleOfflineEarnings(earnings) {
+        if (this.disabled || earnings <= 0) return;
+        
+        this.game.ui.showDoubleOfflineOffer({
+            earnings,
+            purpose: 'double_offline',
+            callback: async () => {
+                const reward = await this.showRewardedVideo('double_offline');
+                if (reward) {
+                    return true; // Double the earnings
+                }
+                return false;
+            }
+        });
+    }
+    
+    offerStreakProtection(streakDays) {
+        if (this.disabled) return;
+        
+        const purpose = 'streak_protection';
+        const adConfig = { ...this.adPurposes[purpose] };
+        adConfig.description = adConfig.description.replace('{days}', streakDays);
+        
+        this.game.lossAversion.showStreakAtRisk({
+            days: streakDays,
+            saveOption: async () => {
+                const reward = await this.showRewardedVideo(purpose);
+                return reward !== null;
+            }
+        });
+    }
+    
+    offerEventBonus(event) {
+        if (this.disabled || !event) return;
+        
+        this.game.ui.showEventAdOffer({
+            event,
+            purpose: 'event_bonus',
+            callback: async () => {
+                const reward = await this.showRewardedVideo('event_bonus');
+                return reward !== null;
+            }
+        });
+    }
+    
+    // Save/Load
+    loadAdState() {
+        const saved = localStorage.getItem('adState');
+        if (saved) {
+            const data = JSON.parse(saved);
+            
+            // Restore counts but reset session data
+            this.analytics = data.analytics || this.analytics;
+            this.adState.adsWatchedToday = data.adsWatchedToday || 0;
+            
+            // Check if day has changed
+            const lastSave = new Date(data.lastSave);
+            const today = new Date();
+            if (lastSave.getDate() !== today.getDate()) {
+                this.resetDailyLimits();
+            }
+        }
+    }
+    
+    saveAdState() {
+        const data = {
+            analytics: this.analytics,
+            adsWatchedToday: this.adState.adsWatchedToday,
+            lastSave: Date.now()
+        };
+        
+        localStorage.setItem('adState', JSON.stringify(data));
+    }
+    
+    getSaveData() {
+        return {
+            analytics: this.analytics,
+            state: {
+                adsWatchedToday: this.adState.adsWatchedToday,
+                activeBoosts: [...this.adState.activeBoosts.entries()],
+                dailyLimits: [...this.adState.dailyLimits.entries()]
+            }
+        };
+    }
+    
+    loadSaveData(data) {
+        if (!data) return;
+        
+        if (data.analytics) {
+            Object.assign(this.analytics, data.analytics);
+        }
+        
+        if (data.state) {
+            this.adState.adsWatchedToday = data.state.adsWatchedToday || 0;
+            
+            if (data.state.activeBoosts) {
+                this.adState.activeBoosts = new Map(data.state.activeBoosts);
+            }
+            
+            if (data.state.dailyLimits) {
+                this.adState.dailyLimits = new Map(data.state.dailyLimits);
+            }
+        }
+    }
+}
+
+export default AdManager;

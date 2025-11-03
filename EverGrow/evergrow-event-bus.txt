@@ -1,0 +1,493 @@
+// EventBus.js
+// Event-driven communication system for decoupled architecture
+// Implements publish-subscribe pattern with priority and wildcards
+
+class EventBus {
+    constructor() {
+        // Event listeners organized by event name
+        this.listeners = new Map();
+        
+        // Event history for debugging
+        this.history = [];
+        this.maxHistorySize = 100;
+        this.historyEnabled = false;
+        
+        // Event statistics
+        this.stats = {
+            eventsEmitted: 0,
+            eventsByType: {},
+            listenersCalled: 0,
+            errors: 0
+        };
+        
+        // Wildcard listeners
+        this.wildcardListeners = new Set();
+        
+        // One-time listeners
+        this.onceListeners = new Map();
+        
+        // Event queue for async processing
+        this.eventQueue = [];
+        this.processing = false;
+        
+        // Priority levels
+        this.priorities = {
+            LOW: 0,
+            NORMAL: 1,
+            HIGH: 2,
+            CRITICAL: 3
+        };
+        
+        // Interceptors for event modification
+        this.interceptors = new Map();
+        
+        // Debug mode
+        this.debug = false;
+    }
+    
+    // Register event listener
+    on(event, callback, options = {}) {
+        const {
+            priority = this.priorities.NORMAL,
+            context = null,
+            once = false
+        } = options;
+        
+        // Validate inputs
+        if (typeof event !== 'string' || !event) {
+            throw new Error('Event name must be a non-empty string');
+        }
+        
+        if (typeof callback !== 'function') {
+            throw new Error('Callback must be a function');
+        }
+        
+        // Create listener object
+        const listener = {
+            callback,
+            context,
+            priority,
+            once,
+            id: this.generateListenerId()
+        };
+        
+        // Handle wildcard listeners
+        if (event === '*') {
+            this.wildcardListeners.add(listener);
+        } else {
+            // Add to regular listeners
+            if (!this.listeners.has(event)) {
+                this.listeners.set(event, []);
+            }
+            
+            const eventListeners = this.listeners.get(event);
+            eventListeners.push(listener);
+            
+            // Sort by priority (higher first)
+            eventListeners.sort((a, b) => b.priority - a.priority);
+        }
+        
+        // Return unsubscribe function
+        return () => this.off(event, listener.id);
+    }
+    
+    // Register one-time listener
+    once(event, callback, options = {}) {
+        return this.on(event, callback, { ...options, once: true });
+    }
+    
+    // Remove event listener
+    off(event, listenerId) {
+        if (event === '*') {
+            // Remove from wildcard listeners
+            this.wildcardListeners.forEach(listener => {
+                if (listener.id === listenerId) {
+                    this.wildcardListeners.delete(listener);
+                }
+            });
+        } else {
+            // Remove from regular listeners
+            const eventListeners = this.listeners.get(event);
+            if (eventListeners) {
+                const index = eventListeners.findIndex(l => l.id === listenerId);
+                if (index !== -1) {
+                    eventListeners.splice(index, 1);
+                }
+                
+                // Clean up empty arrays
+                if (eventListeners.length === 0) {
+                    this.listeners.delete(event);
+                }
+            }
+        }
+    }
+    
+    // Remove all listeners for an event
+    offAll(event) {
+        if (event) {
+            this.listeners.delete(event);
+        } else {
+            this.listeners.clear();
+            this.wildcardListeners.clear();
+        }
+    }
+    
+    // Emit event synchronously
+    emit(event, data = null, options = {}) {
+        const {
+            async = false,
+            silent = false
+        } = options;
+        
+        // Create event object
+        const eventObj = {
+            name: event,
+            data,
+            timestamp: Date.now(),
+            id: this.generateEventId()
+        };
+        
+        // Apply interceptors
+        const interceptedEvent = this.applyInterceptors(eventObj);
+        if (!interceptedEvent) return; // Event was cancelled
+        
+        // Update statistics
+        this.updateStats(event);
+        
+        // Add to history
+        if (this.historyEnabled) {
+            this.addToHistory(interceptedEvent);
+        }
+        
+        // Debug logging
+        if (this.debug && !silent) {
+            console.log(`[EventBus] Emit: ${event}`, data);
+        }
+        
+        if (async) {
+            // Queue for async processing
+            this.eventQueue.push(interceptedEvent);
+            this.processQueue();
+        } else {
+            // Process immediately
+            this.processEvent(interceptedEvent);
+        }
+    }
+    
+    // Emit event asynchronously
+    emitAsync(event, data = null) {
+        return new Promise((resolve) => {
+            this.emit(event, data, { async: true });
+            
+            // Resolve when event is processed
+            const checkInterval = setInterval(() => {
+                const inQueue = this.eventQueue.some(e => e.name === event);
+                if (!inQueue) {
+                    clearInterval(checkInterval);
+                    resolve();
+                }
+            }, 10);
+        });
+    }
+    
+    // Process event
+    processEvent(eventObj) {
+        const { name, data } = eventObj;
+        const listeners = [];
+        
+        // Get regular listeners
+        const eventListeners = this.listeners.get(name);
+        if (eventListeners) {
+            listeners.push(...eventListeners);
+        }
+        
+        // Add wildcard listeners
+        listeners.push(...this.wildcardListeners);
+        
+        // Process namespace wildcards (e.g., "game:*" matches "game:start")
+        const namespaceMatch = name.match(/^(.+):/);
+        if (namespaceMatch) {
+            const namespaceWildcard = `${namespaceMatch[1]}:*`;
+            const namespaceListeners = this.listeners.get(namespaceWildcard);
+            if (namespaceListeners) {
+                listeners.push(...namespaceListeners);
+            }
+        }
+        
+        // Execute listeners
+        const toRemove = [];
+        
+        listeners.forEach(listener => {
+            try {
+                // Call with context if provided
+                if (listener.context) {
+                    listener.callback.call(listener.context, data, eventObj);
+                } else {
+                    listener.callback(data, eventObj);
+                }
+                
+                this.stats.listenersCalled++;
+                
+                // Mark one-time listeners for removal
+                if (listener.once) {
+                    toRemove.push(listener);
+                }
+                
+            } catch (error) {
+                console.error(`[EventBus] Error in listener for ${name}:`, error);
+                this.stats.errors++;
+                
+                // Emit error event
+                if (name !== 'error') {
+                    this.emit('error', {
+                        originalEvent: name,
+                        error,
+                        listener
+                    }, { silent: true });
+                }
+            }
+        });
+        
+        // Remove one-time listeners
+        toRemove.forEach(listener => {
+            if (this.wildcardListeners.has(listener)) {
+                this.wildcardListeners.delete(listener);
+            } else {
+                const eventListeners = this.listeners.get(name);
+                if (eventListeners) {
+                    const index = eventListeners.indexOf(listener);
+                    if (index !== -1) {
+                        eventListeners.splice(index, 1);
+                    }
+                }
+            }
+        });
+    }
+    
+    // Process event queue
+    async processQueue() {
+        if (this.processing || this.eventQueue.length === 0) return;
+        
+        this.processing = true;
+        
+        while (this.eventQueue.length > 0) {
+            const event = this.eventQueue.shift();
+            
+            // Small delay to prevent blocking
+            await new Promise(resolve => setTimeout(resolve, 0));
+            
+            this.processEvent(event);
+        }
+        
+        this.processing = false;
+    }
+    
+    // Add interceptor
+    addInterceptor(event, interceptor) {
+        if (!this.interceptors.has(event)) {
+            this.interceptors.set(event, []);
+        }
+        
+        this.interceptors.get(event).push(interceptor);
+        
+        // Return remove function
+        return () => {
+            const interceptors = this.interceptors.get(event);
+            if (interceptors) {
+                const index = interceptors.indexOf(interceptor);
+                if (index !== -1) {
+                    interceptors.splice(index, 1);
+                }
+            }
+        };
+    }
+    
+    // Apply interceptors
+    applyInterceptors(eventObj) {
+        const interceptors = this.interceptors.get(eventObj.name) || [];
+        const globalInterceptors = this.interceptors.get('*') || [];
+        
+        const allInterceptors = [...interceptors, ...globalInterceptors];
+        
+        let currentEvent = eventObj;
+        
+        for (const interceptor of allInterceptors) {
+            try {
+                const result = interceptor(currentEvent);
+                
+                // If interceptor returns false, cancel event
+                if (result === false) return null;
+                
+                // If interceptor returns new event object, use it
+                if (result && typeof result === 'object') {
+                    currentEvent = result;
+                }
+            } catch (error) {
+                console.error('[EventBus] Interceptor error:', error);
+            }
+        }
+        
+        return currentEvent;
+    }
+    
+    // Wait for event
+    waitFor(event, timeout = 0) {
+        return new Promise((resolve, reject) => {
+            let timeoutId;
+            
+            const cleanup = () => {
+                this.off(event, listenerId);
+                if (timeoutId) clearTimeout(timeoutId);
+            };
+            
+            const listenerId = this.on(event, (data) => {
+                cleanup();
+                resolve(data);
+            }).id;
+            
+            if (timeout > 0) {
+                timeoutId = setTimeout(() => {
+                    cleanup();
+                    reject(new Error(`Timeout waiting for event: ${event}`));
+                }, timeout);
+            }
+        });
+    }
+    
+    // Get listener count
+    getListenerCount(event) {
+        if (event) {
+            const listeners = this.listeners.get(event) || [];
+            return listeners.length + this.wildcardListeners.size;
+        }
+        
+        // Total count
+        let count = this.wildcardListeners.size;
+        this.listeners.forEach(listeners => {
+            count += listeners.length;
+        });
+        return count;
+    }
+    
+    // Check if has listeners
+    hasListeners(event) {
+        return this.getListenerCount(event) > 0;
+    }
+    
+    // Update statistics
+    updateStats(event) {
+        this.stats.eventsEmitted++;
+        this.stats.eventsByType[event] = (this.stats.eventsByType[event] || 0) + 1;
+    }
+    
+    // Add to history
+    addToHistory(eventObj) {
+        this.history.push(eventObj);
+        
+        // Limit history size
+        if (this.history.length > this.maxHistorySize) {
+            this.history.shift();
+        }
+    }
+    
+    // Get event history
+    getHistory(filter = null) {
+        if (!filter) return [...this.history];
+        
+        return this.history.filter(event => {
+            if (typeof filter === 'string') {
+                return event.name === filter;
+            } else if (filter instanceof RegExp) {
+                return filter.test(event.name);
+            } else if (typeof filter === 'function') {
+                return filter(event);
+            }
+            return false;
+        });
+    }
+    
+    // Clear history
+    clearHistory() {
+        this.history = [];
+    }
+    
+    // Get statistics
+    getStats() {
+        return {
+            ...this.stats,
+            listenerCount: this.getListenerCount(),
+            queueLength: this.eventQueue.length
+        };
+    }
+    
+    // Reset statistics
+    resetStats() {
+        this.stats = {
+            eventsEmitted: 0,
+            eventsByType: {},
+            listenersCalled: 0,
+            errors: 0
+        };
+    }
+    
+    // Enable/disable features
+    enableHistory(enabled = true) {
+        this.historyEnabled = enabled;
+        if (!enabled) {
+            this.clearHistory();
+        }
+    }
+    
+    enableDebug(enabled = true) {
+        this.debug = enabled;
+    }
+    
+    // Utility methods
+    generateListenerId() {
+        return `listener_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+    
+    generateEventId() {
+        return `event_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+    
+    // Debugging
+    debugInfo() {
+        console.group('[EventBus] Debug Info');
+        console.log('Listeners:', this.listeners);
+        console.log('Wildcard Listeners:', this.wildcardListeners.size);
+        console.log('Event Queue:', this.eventQueue.length);
+        console.log('Statistics:', this.getStats());
+        console.log('History:', this.history.length, 'events');
+        console.groupEnd();
+    }
+    
+    // Create namespaced event bus
+    namespace(ns) {
+        const namespacedBus = {
+            on: (event, callback, options) => {
+                return this.on(`${ns}:${event}`, callback, options);
+            },
+            once: (event, callback, options) => {
+                return this.once(`${ns}:${event}`, callback, options);
+            },
+            off: (event, listenerId) => {
+                return this.off(`${ns}:${event}`, listenerId);
+            },
+            emit: (event, data, options) => {
+                return this.emit(`${ns}:${event}`, data, options);
+            },
+            emitAsync: (event, data) => {
+                return this.emitAsync(`${ns}:${event}`, data);
+            },
+            waitFor: (event, timeout) => {
+                return this.waitFor(`${ns}:${event}`, timeout);
+            }
+        };
+        
+        return namespacedBus;
+    }
+}
+
+// Export singleton instance
+export default EventBus;

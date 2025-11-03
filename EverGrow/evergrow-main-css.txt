@@ -1,0 +1,679 @@
+/* main.css - EverGrow Core Styles */
+/* Psychologically optimized design system */
+
+/* CSS Variables - Color Psychology */
+:root {
+    /* Primary Colors - Growth & Nature */
+    --color-primary: #2E8B57; /* Forest Green - Growth, stability */
+    --color-primary-dark: #1a5235;
+    --color-primary-light: #48a870;
+    
+    /* Accent Colors - Engagement & Action */
+    --color-accent: #FFD700; /* Gold - Achievement, value */
+    --color-energy: #FF8844; /* Orange - Energy, excitement */
+    --color-premium: #9370DB; /* Purple - Luxury, mystique */
+    
+    /* Semantic Colors */
+    --color-positive: #48a870; /* Success, gains */
+    --color-negative: #FF6B6B; /* Loss, danger */
+    --color-warning: #FFA500; /* Caution, attention */
+    --color-info: #4169E1; /* Information, progress */
+    
+    /* Background Colors */
+    --bg-primary: #1a2a1a; /* Dark green - Immersion */
+    --bg-secondary: #2d4a2d; /* Medium green - Depth */
+    --bg-overlay: rgba(0, 0, 0, 0.8);
+    
+    /* Text Colors */
+    --text-primary: #FFFFFF;
+    --text-secondary: #B8D4B8;
+    --text-muted: #7A9A7A;
+    
+    /* Spacing System */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+    --space-xxl: 48px;
+    
+    /* Typography Scale */
+    --font-xs: 12px;
+    --font-sm: 14px;
+    --font-base: 16px;
+    --font-lg: 18px;
+    --font-xl: 24px;
+    --font-xxl: 32px;
+    --font-display: 48px;
+    
+    /* Timing - Dopamine optimization */
+    --transition-fast: 200ms;
+    --transition-normal: 300ms;
+    --transition-slow: 500ms;
+    
+    /* Z-index layers */
+    --z-background: 0;
+    --z-content: 10;
+    --z-ui: 100;
+    --z-popups: 1000;
+    --z-notifications: 2000;
+    --z-critical: 9999;
+}
+
+/* Global Reset */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* Base Styles */
+html {
+    font-size: 16px;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+    
+    /* Psychological comfort */
+    background-attachment: fixed;
+    transition: background-color var(--transition-slow);
+}
+
+/* Game Container */
+.game-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    position: relative;
+    opacity: 0;
+    animation: fadeIn 1s ease forwards;
+}
+
+/* Header - F-Pattern Hot Zone */
+.game-header {
+    background: linear-gradient(180deg, rgba(0,0,0,0.3) 0%, transparent 100%);
+    padding: var(--space-md);
+    position: sticky;
+    top: 0;
+    z-index: var(--z-ui);
+    backdrop-filter: blur(10px);
+}
+
+.top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-md);
+}
+
+.game-title {
+    font-size: var(--font-xl);
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+/* Premium Zone - Psychological anchoring */
+.premium-zone {
+    display: flex;
+    gap: var(--space-md);
+}
+
+.premium-btn {
+    background: linear-gradient(135deg, var(--color-premium) 0%, var(--color-accent) 100%);
+    border: none;
+    border-radius: 25px;
+    padding: var(--space-sm) var(--space-lg);
+    color: white;
+    font-weight: 600;
+    font-size: var(--font-lg);
+    cursor: pointer;
+    transition: all var(--transition-normal);
+    box-shadow: 0 4px 15px rgba(147, 112, 219, 0.4);
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.premium-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(147, 112, 219, 0.6);
+}
+
+.premium-btn:active {
+    transform: translateY(0);
+}
+
+/* Stats Bar */
+.stats-bar {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-xl);
+    flex-wrap: wrap;
+}
+
+.stat-item {
+    text-align: center;
+    padding: var(--space-sm);
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 15px;
+    backdrop-filter: blur(5px);
+    min-width: 120px;
+    transition: all var(--transition-normal);
+}
+
+.stat-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: scale(1.05);
+}
+
+.stat-label {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.8;
+}
+
+.stat-value {
+    font-size: var(--font-xl);
+    font-weight: 700;
+    color: var(--color-accent);
+    margin-top: var(--space-xs);
+    text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+}
+
+/* Streak Display - Fire effect */
+.streak-display {
+    position: relative;
+}
+
+.fire-icon {
+    font-size: var(--font-xxl);
+    filter: drop-shadow(0 0 10px rgba(255, 100, 0, 0.8));
+    animation: fireFlicker 2s ease-in-out infinite;
+}
+
+/* Main Game Area */
+.game-main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 280px 1fr 280px;
+    gap: var(--space-lg);
+    padding: var(--space-lg);
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+/* Action Zone - Central focus */
+.action-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+/* Main Clicker Button - Dopamine trigger */
+.main-clicker-container {
+    position: relative;
+    margin-bottom: var(--space-xl);
+}
+
+.main-clicker {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    border: none;
+    background: radial-gradient(circle at 30% 30%, 
+                var(--color-primary-light) 0%, 
+                var(--color-primary) 50%, 
+                var(--color-primary-dark) 100%);
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 10px 40px rgba(46, 139, 87, 0.5),
+                inset 0 -5px 10px rgba(0, 0, 0, 0.3);
+    transition: all var(--transition-fast);
+}
+
+.main-clicker:hover {
+    transform: scale(1.05);
+    box-shadow: 0 15px 50px rgba(46, 139, 87, 0.7),
+                inset 0 -5px 15px rgba(0, 0, 0, 0.4);
+}
+
+.main-clicker:active {
+    transform: scale(0.95);
+    box-shadow: 0 5px 20px rgba(46, 139, 87, 0.5),
+                inset 0 -2px 5px rgba(0, 0, 0, 0.3);
+}
+
+.clicker-inner {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.grow-icon {
+    font-size: 80px;
+    user-select: none;
+    z-index: 2;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+/* Click Feedback - Dopamine visual */
+.click-feedback {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: radial-gradient(circle, 
+                rgba(255, 255, 255, 0.3) 0%, 
+                transparent 70%);
+    transform: scale(0);
+    pointer-events: none;
+}
+
+.main-clicker:active .click-feedback {
+    animation: clickRipple 0.6s ease-out;
+}
+
+/* Click Power Display */
+.click-power {
+    text-align: center;
+    font-size: var(--font-lg);
+    color: var(--text-secondary);
+    margin-top: var(--space-md);
+}
+
+/* Floating Numbers */
+#floatingNumbers {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: var(--z-ui);
+}
+
+.floating-number {
+    position: absolute;
+    font-size: var(--font-xl);
+    font-weight: 700;
+    color: var(--color-accent);
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    animation: floatUp 2s ease-out forwards;
+    pointer-events: none;
+}
+
+/* Side Panels */
+.upgrades-panel, .social-panel {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 20px;
+    padding: var(--space-lg);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.panel-title {
+    font-size: var(--font-xl);
+    margin-bottom: var(--space-lg);
+    text-align: center;
+    color: var(--color-accent);
+}
+
+/* Upgrades List */
+.upgrades-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.upgrade-item {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 15px;
+    padding: var(--space-md);
+    cursor: pointer;
+    transition: all var(--transition-normal);
+    border: 2px solid transparent;
+    position: relative;
+    overflow: hidden;
+}
+
+.upgrade-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--color-primary-light);
+    transform: translateX(5px);
+}
+
+.upgrade-item.affordable {
+    border-color: var(--color-positive);
+    box-shadow: 0 0 20px rgba(72, 168, 112, 0.3);
+}
+
+.upgrade-item.affordable:hover {
+    box-shadow: 0 0 30px rgba(72, 168, 112, 0.5);
+}
+
+.upgrade-item.locked {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.upgrade-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-sm);
+}
+
+.upgrade-name {
+    font-weight: 600;
+    font-size: var(--font-lg);
+}
+
+.upgrade-cost {
+    font-size: var(--font-sm);
+    color: var(--color-energy);
+}
+
+.upgrade-description {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.upgrade-owned {
+    position: absolute;
+    top: var(--space-sm);
+    right: var(--space-sm);
+    background: var(--color-primary);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: var(--font-xs);
+    font-weight: 600;
+}
+
+/* Social Feed */
+.achievement-feed, .feed-items {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.feed-item {
+    background: rgba(255, 255, 255, 0.05);
+    padding: var(--space-sm);
+    border-radius: 10px;
+    font-size: var(--font-sm);
+    animation: slideInRight 0.5s ease-out;
+}
+
+/* Bottom Navigation */
+.bottom-nav {
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+    padding: var(--space-sm);
+    display: flex;
+    justify-content: space-around;
+    position: sticky;
+    bottom: 0;
+    z-index: var(--z-ui);
+}
+
+.nav-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    padding: var(--space-sm) var(--space-md);
+    cursor: pointer;
+    transition: all var(--transition-normal);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-xs);
+    flex: 1;
+}
+
+.nav-btn:hover {
+    color: var(--text-primary);
+    transform: translateY(-2px);
+}
+
+.nav-btn.active {
+    color: var(--color-accent);
+}
+
+.nav-icon {
+    font-size: var(--font-xl);
+}
+
+.nav-label {
+    font-size: var(--font-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Event Banner - FOMO generator */
+.event-banner {
+    position: fixed;
+    top: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, var(--color-energy) 0%, var(--color-negative) 100%);
+    padding: var(--space-md) var(--space-xl);
+    border-radius: 30px;
+    box-shadow: 0 10px 30px rgba(255, 136, 68, 0.5);
+    z-index: var(--z-notifications);
+    animation: slideDown 0.5s ease-out, pulse 2s ease-in-out infinite;
+}
+
+.event-content {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    color: white;
+    font-weight: 600;
+}
+
+.event-timer {
+    background: rgba(0, 0, 0, 0.3);
+    padding: var(--space-xs) var(--space-sm);
+    border-radius: 15px;
+    font-family: monospace;
+}
+
+/* Modals and Overlays */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--z-popups);
+    backdrop-filter: blur(5px);
+}
+
+.modal {
+    background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+    border-radius: 20px;
+    padding: var(--space-xl);
+    max-width: 600px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Psychological UI Elements */
+.pulse-glow {
+    animation: pulseGlow 2s ease-in-out infinite;
+}
+
+.shake {
+    animation: shake 0.5s ease-in-out;
+}
+
+.near-miss-bar {
+    background: linear-gradient(90deg, 
+                var(--color-positive) 0%, 
+                var(--color-positive) 90%, 
+                var(--color-negative) 91%, 
+                var(--color-negative) 100%);
+    height: 30px;
+    border-radius: 15px;
+    position: relative;
+    overflow: hidden;
+}
+
+.near-miss-bar::after {
+    content: '95%';
+    position: absolute;
+    right: 10%;
+    top: 50%;
+    transform: translateY(-50%);
+    color: white;
+    font-weight: 700;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Notification System */
+.notification {
+    background: rgba(0, 0, 0, 0.9);
+    border-radius: 15px;
+    padding: var(--space-md);
+    margin-bottom: var(--space-sm);
+    max-width: 400px;
+    pointer-events: auto;
+    animation: slideInRight 0.3s ease-out;
+    border-left: 4px solid var(--color-accent);
+}
+
+.notification.success {
+    border-left-color: var(--color-positive);
+}
+
+.notification.error {
+    border-left-color: var(--color-negative);
+}
+
+.notification.warning {
+    border-left-color: var(--color-warning);
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--color-primary);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--color-primary-light);
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+    .game-main {
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+    }
+    
+    .upgrades-panel, .social-panel {
+        max-height: none;
+        margin-bottom: var(--space-lg);
+    }
+}
+
+@media (max-width: 768px) {
+    .game-title {
+        font-size: var(--font-lg);
+    }
+    
+    .stats-bar {
+        gap: var(--space-md);
+    }
+    
+    .stat-item {
+        min-width: 100px;
+    }
+    
+    .main-clicker {
+        width: 150px;
+        height: 150px;
+    }
+    
+    .grow-icon {
+        font-size: 60px;
+    }
+    
+    .nav-label {
+        display: none;
+    }
+}
+
+/* Loading State */
+#loadingScreen {
+    background: var(--bg-primary);
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--z-critical);
+}
+
+/* Utility Classes */
+.hidden {
+    display: none !important;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.mt-1 { margin-top: var(--space-xs); }
+.mt-2 { margin-top: var(--space-sm); }
+.mt-3 { margin-top: var(--space-md); }
+.mt-4 { margin-top: var(--space-lg); }
+
+.mb-1 { margin-bottom: var(--space-xs); }
+.mb-2 { margin-bottom: var(--space-sm); }
+.mb-3 { margin-bottom: var(--space-md); }
+.mb-4 { margin-bottom: var(--space-lg); }

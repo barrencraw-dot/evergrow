@@ -1,0 +1,714 @@
+// ResourceManager.js
+// Handles loading and caching of game assets
+// Implements progressive loading and fallbacks
+
+class ResourceManager {
+    constructor() {
+        // Asset manifest
+        this.manifest = {
+            images: {
+                // UI Icons
+                'icon-growth': 'assets/images/icons/growth.png',
+                'icon-prestige': 'assets/images/icons/prestige.png',
+                'icon-achievement': 'assets/images/icons/achievement.png',
+                'icon-gem': 'assets/images/icons/gem.png',
+                'icon-streak': 'assets/images/icons/streak.png',
+                
+                // Backgrounds
+                'bg-main': 'assets/images/backgrounds/main.jpg',
+                'bg-prestige': 'assets/images/backgrounds/prestige.jpg',
+                'bg-event': 'assets/images/backgrounds/event.jpg',
+                
+                // Sprites
+                'sprite-particles': 'assets/images/sprites/particles.png',
+                'sprite-effects': 'assets/images/sprites/effects.png',
+                
+                // Upgrades
+                'upgrade-autoclick': 'assets/images/upgrades/autoclick.png',
+                'upgrade-multiplier': 'assets/images/upgrades/multiplier.png',
+                'upgrade-timewarp': 'assets/images/upgrades/timewarp.png'
+            },
+            
+            audio: {
+                // Music tracks
+                'music-main': 'assets/audio/music/main_theme.mp3',
+                'music-prestige': 'assets/audio/music/prestige_theme.mp3',
+                'music-event': 'assets/audio/music/event_theme.mp3',
+                'music-tension': 'assets/audio/music/tension_loop.mp3',
+                
+                // Sound effects
+                'sfx-click': 'assets/audio/sfx/click.wav',
+                'sfx-purchase': 'assets/audio/sfx/purchase.wav',
+                'sfx-achievement': 'assets/audio/sfx/achievement.wav',
+                'sfx-prestige': 'assets/audio/sfx/prestige.wav',
+                'sfx-reward': 'assets/audio/sfx/reward.wav',
+                'sfx-error': 'assets/audio/sfx/error.wav',
+                'sfx-notification': 'assets/audio/sfx/notification.wav',
+                
+                // Ambient sounds
+                'ambient-growth': 'assets/audio/ambient/growth_loop.mp3',
+                'ambient-flow': 'assets/audio/ambient/flow_state.mp3'
+            },
+            
+            fonts: {
+                'poppins': {
+                    url: 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;900&display=swap',
+                    family: 'Poppins'
+                }
+            },
+            
+            data: {
+                'game-config': 'assets/data/config.json',
+                'balance-data': 'assets/data/balance.json',
+                'localization': 'assets/data/localization.json'
+            }
+        };
+        
+        // Resource cache
+        this.cache = {
+            images: new Map(),
+            audio: new Map(),
+            data: new Map()
+        };
+        
+        // Loading state
+        this.loadingState = {
+            totalAssets: 0,
+            loadedAssets: 0,
+            failedAssets: [],
+            currentlyLoading: new Set(),
+            priorities: {
+                critical: [],
+                high: [],
+                normal: [],
+                low: []
+            }
+        };
+        
+        // Configuration
+        this.config = {
+            // Retry settings
+            maxRetries: 3,
+            retryDelay: 1000,
+            
+            // Loading settings
+            parallelLoads: 6,
+            preloadAudio: true,
+            lazyLoadImages: true,
+            
+            // Cache settings
+            cacheEnabled: true,
+            maxCacheSize: 50 * 1024 * 1024, // 50MB
+            
+            // Performance
+            imageQuality: this.detectImageQuality(),
+            audioQuality: this.detectAudioQuality()
+        };
+        
+        // Loading queue
+        this.loadQueue = [];
+        this.activeLoads = 0;
+        
+        // Event callbacks
+        this.callbacks = {
+            progress: [],
+            complete: [],
+            error: []
+        };
+    }
+    
+    initialize() {
+        console.log('📦 Resource Manager initializing...');
+        
+        // Set up service worker for caching
+        this.setupServiceWorkerCache();
+        
+        // Detect connection speed
+        this.detectConnectionSpeed();
+        
+        // Categorize assets by priority
+        this.categorizeAssets();
+        
+        console.log('✅ Resource Manager ready');
+    }
+    
+    // Categorize assets by loading priority
+    categorizeAssets() {
+        // Critical - needed immediately
+        this.loadingState.priorities.critical = [
+            'icon-growth',
+            'sfx-click',
+            'game-config'
+        ];
+        
+        // High - needed soon
+        this.loadingState.priorities.high = [
+            'bg-main',
+            'icon-gem',
+            'icon-streak',
+            'sfx-purchase',
+            'sfx-achievement',
+            'music-main'
+        ];
+        
+        // Normal - standard priority
+        this.loadingState.priorities.normal = [
+            'sprite-particles',
+            'sprite-effects',
+            'upgrade-autoclick',
+            'upgrade-multiplier',
+            'ambient-growth'
+        ];
+        
+        // Low - can be lazy loaded
+        this.loadingState.priorities.low = [
+            'bg-prestige',
+            'bg-event',
+            'music-prestige',
+            'music-event'
+        ];
+    }
+    
+    // Load all critical assets
+    async loadCritical() {
+        console.log('Loading critical assets...');
+        
+        const critical = this.loadingState.priorities.critical;
+        const promises = critical.map(id => this.loadAsset(id, 'critical'));
+        
+        try {
+            await Promise.all(promises);
+            console.log('✅ Critical assets loaded');
+            return true;
+        } catch (error) {
+            console.error('❌ Failed to load critical assets:', error);
+            return false;
+        }
+    }
+    
+    // Preload high priority assets
+    async preloadHighPriority() {
+        const high = this.loadingState.priorities.high;
+        
+        // Load in background without blocking
+        high.forEach(id => {
+            this.loadAsset(id, 'high').catch(error => {
+                console.warn(`Failed to preload ${id}:`, error);
+            });
+        });
+    }
+    
+    // Load a specific asset
+    async loadAsset(id, priority = 'normal') {
+        // Check cache first
+        const cached = this.getFromCache(id);
+        if (cached) {
+            return cached;
+        }
+        
+        // Check if already loading
+        if (this.loadingState.currentlyLoading.has(id)) {
+            return this.waitForLoad(id);
+        }
+        
+        // Find asset in manifest
+        const assetInfo = this.findAssetInfo(id);
+        if (!assetInfo) {
+            throw new Error(`Asset not found: ${id}`);
+        }
+        
+        // Add to loading queue
+        return this.queueLoad(id, assetInfo, priority);
+    }
+    
+    // Queue asset for loading
+    queueLoad(id, assetInfo, priority) {
+        return new Promise((resolve, reject) => {
+            const loadItem = {
+                id,
+                ...assetInfo,
+                priority,
+                resolve,
+                reject,
+                retries: 0
+            };
+            
+            // Add to queue based on priority
+            if (priority === 'critical') {
+                this.loadQueue.unshift(loadItem);
+            } else {
+                this.loadQueue.push(loadItem);
+            }
+            
+            // Process queue
+            this.processLoadQueue();
+        });
+    }
+    
+    // Process loading queue
+    async processLoadQueue() {
+        while (this.loadQueue.length > 0 && 
+               this.activeLoads < this.config.parallelLoads) {
+            
+            const item = this.loadQueue.shift();
+            this.activeLoads++;
+            
+            // Mark as loading
+            this.loadingState.currentlyLoading.add(item.id);
+            
+            try {
+                const asset = await this.loadAssetItem(item);
+                
+                // Cache the asset
+                this.addToCache(item.id, asset, item.type);
+                
+                // Update progress
+                this.updateProgress(item.id, true);
+                
+                // Resolve promise
+                item.resolve(asset);
+                
+            } catch (error) {
+                // Retry logic
+                if (item.retries < this.config.maxRetries) {
+                    item.retries++;
+                    console.warn(`Retrying ${item.id} (${item.retries}/${this.config.maxRetries})`);
+                    
+                    // Re-queue with delay
+                    setTimeout(() => {
+                        this.loadQueue.unshift(item);
+                        this.processLoadQueue();
+                    }, this.config.retryDelay * item.retries);
+                    
+                } else {
+                    // Max retries reached
+                    console.error(`Failed to load ${item.id}:`, error);
+                    this.loadingState.failedAssets.push(item.id);
+                    this.updateProgress(item.id, false);
+                    item.reject(error);
+                }
+                
+            } finally {
+                this.activeLoads--;
+                this.loadingState.currentlyLoading.delete(item.id);
+                
+                // Continue processing queue
+                this.processLoadQueue();
+            }
+        }
+    }
+    
+    // Load individual asset
+    async loadAssetItem(item) {
+        switch (item.type) {
+            case 'image':
+                return this.loadImage(item.url);
+                
+            case 'audio':
+                return this.loadAudio(item.url);
+                
+            case 'data':
+                return this.loadData(item.url);
+                
+            case 'font':
+                return this.loadFont(item);
+                
+            default:
+                throw new Error(`Unknown asset type: ${item.type}`);
+        }
+    }
+    
+    // Load image
+    loadImage(url) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            
+            // Handle different quality levels
+            const qualityUrl = this.getQualityUrl(url, 'image');
+            
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error(`Failed to load image: ${qualityUrl}`));
+            
+            // Set crossorigin for canvas usage
+            img.crossOrigin = 'anonymous';
+            
+            img.src = qualityUrl;
+        });
+    }
+    
+    // Load audio
+    loadAudio(url) {
+        return new Promise((resolve, reject) => {
+            const audio = new Audio();
+            
+            // Handle different quality levels
+            const qualityUrl = this.getQualityUrl(url, 'audio');
+            
+            audio.addEventListener('canplaythrough', () => resolve(audio), { once: true });
+            audio.addEventListener('error', () => reject(new Error(`Failed to load audio: ${qualityUrl}`)), { once: true });
+            
+            // Preload if enabled
+            if (this.config.preloadAudio) {
+                audio.preload = 'auto';
+            }
+            
+            audio.src = qualityUrl;
+        });
+    }
+    
+    // Load data
+    async loadData(url) {
+        try {
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const contentType = response.headers.get('content-type');
+            
+            if (contentType && contentType.includes('application/json')) {
+                return response.json();
+            } else {
+                return response.text();
+            }
+            
+        } catch (error) {
+            throw new Error(`Failed to load data: ${url} - ${error.message}`);
+        }
+    }
+    
+    // Load font
+    loadFont(fontInfo) {
+        return new Promise((resolve, reject) => {
+            // For Google Fonts, just add link tag
+            if (fontInfo.url.includes('fonts.googleapis.com')) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = fontInfo.url;
+                
+                link.onload = () => {
+                    // Wait a bit for font to be ready
+                    setTimeout(() => resolve(fontInfo), 100);
+                };
+                
+                link.onerror = () => reject(new Error(`Failed to load font: ${fontInfo.url}`));
+                
+                document.head.appendChild(link);
+                
+            } else {
+                // For custom fonts, use FontFace API
+                const fontFace = new FontFace(fontInfo.family, `url(${fontInfo.url})`);
+                
+                fontFace.load()
+                    .then(loadedFace => {
+                        document.fonts.add(loadedFace);
+                        resolve(fontInfo);
+                    })
+                    .catch(reject);
+            }
+        });
+    }
+    
+    // Get quality-adjusted URL
+    getQualityUrl(url, type) {
+        const quality = type === 'image' ? 
+            this.config.imageQuality : 
+            this.config.audioQuality;
+        
+        // Add quality suffix if not high quality
+        if (quality !== 'high') {
+            const extension = url.substring(url.lastIndexOf('.'));
+            const base = url.substring(0, url.lastIndexOf('.'));
+            return `${base}_${quality}${extension}`;
+        }
+        
+        return url;
+    }
+    
+    // Find asset info in manifest
+    findAssetInfo(id) {
+        // Search all categories
+        for (const [type, assets] of Object.entries(this.manifest)) {
+            if (type === 'fonts') {
+                if (assets[id]) {
+                    return { type: 'font', ...assets[id] };
+                }
+            } else {
+                if (assets[id]) {
+                    return { type, url: assets[id] };
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    // Cache management
+    addToCache(id, asset, type) {
+        if (!this.config.cacheEnabled) return;
+        
+        const cache = this.cache[type] || this.cache.data;
+        cache.set(id, asset);
+        
+        // Check cache size
+        this.checkCacheSize();
+    }
+    
+    getFromCache(id) {
+        // Search all caches
+        for (const cache of Object.values(this.cache)) {
+            if (cache.has(id)) {
+                return cache.get(id);
+            }
+        }
+        
+        return null;
+    }
+    
+    checkCacheSize() {
+        // Simple size estimation
+        let totalSize = 0;
+        
+        for (const cache of Object.values(this.cache)) {
+            totalSize += cache.size * 50000; // Rough estimate: 50KB per asset
+        }
+        
+        if (totalSize > this.config.maxCacheSize) {
+            // Clear oldest entries
+            this.clearOldestCacheEntries();
+        }
+    }
+    
+    clearOldestCacheEntries() {
+        // Simple FIFO clearing
+        for (const cache of Object.values(this.cache)) {
+            if (cache.size > 10) {
+                const entries = Array.from(cache.entries());
+                const toRemove = entries.slice(0, 5); // Remove first 5
+                
+                toRemove.forEach(([key]) => cache.delete(key));
+            }
+        }
+    }
+    
+    // Progress tracking
+    updateProgress(id, success) {
+        this.loadingState.loadedAssets++;
+        
+        const progress = this.loadingState.loadedAssets / this.loadingState.totalAssets;
+        
+        // Notify callbacks
+        this.callbacks.progress.forEach(cb => {
+            try {
+                cb(progress, id, success);
+            } catch (error) {
+                console.error('Progress callback error:', error);
+            }
+        });
+        
+        // Check if complete
+        if (this.loadingState.loadedAssets >= this.loadingState.totalAssets) {
+            this.onLoadComplete();
+        }
+    }
+    
+    onLoadComplete() {
+        console.log('✅ All assets loaded');
+        
+        // Notify complete callbacks
+        this.callbacks.complete.forEach(cb => {
+            try {
+                cb(this.loadingState.failedAssets);
+            } catch (error) {
+                console.error('Complete callback error:', error);
+            }
+        });
+    }
+    
+    // Wait for asset to load
+    waitForLoad(id) {
+        return new Promise((resolve, reject) => {
+            const checkInterval = setInterval(() => {
+                if (!this.loadingState.currentlyLoading.has(id)) {
+                    clearInterval(checkInterval);
+                    
+                    const asset = this.getFromCache(id);
+                    if (asset) {
+                        resolve(asset);
+                    } else if (this.loadingState.failedAssets.includes(id)) {
+                        reject(new Error(`Asset failed to load: ${id}`));
+                    }
+                }
+            }, 100);
+        });
+    }
+    
+    // Get loaded asset
+    get(id) {
+        const asset = this.getFromCache(id);
+        
+        if (!asset) {
+            console.warn(`Asset not loaded: ${id}`);
+            // Could trigger lazy load here
+        }
+        
+        return asset;
+    }
+    
+    // Batch loading
+    async loadBatch(ids, priority = 'normal') {
+        const promises = ids.map(id => this.loadAsset(id, priority));
+        return Promise.all(promises);
+    }
+    
+    // Event handling
+    on(event, callback) {
+        if (this.callbacks[event]) {
+            this.callbacks[event].push(callback);
+        }
+    }
+    
+    off(event, callback) {
+        if (this.callbacks[event]) {
+            const index = this.callbacks[event].indexOf(callback);
+            if (index !== -1) {
+                this.callbacks[event].splice(index, 1);
+            }
+        }
+    }
+    
+    // Service worker cache setup
+    setupServiceWorkerCache() {
+        if ('serviceWorker' in navigator) {
+            // Tell service worker to cache assets
+            navigator.serviceWorker.ready.then(registration => {
+                if (registration.active) {
+                    const assetUrls = this.getAllAssetUrls();
+                    
+                    registration.active.postMessage({
+                        type: 'cache-assets',
+                        assets: assetUrls
+                    });
+                }
+            });
+        }
+    }
+    
+    getAllAssetUrls() {
+        const urls = [];
+        
+        for (const [type, assets] of Object.entries(this.manifest)) {
+            if (type === 'fonts') {
+                Object.values(assets).forEach(font => urls.push(font.url));
+            } else {
+                Object.values(assets).forEach(url => urls.push(url));
+            }
+        }
+        
+        return urls;
+    }
+    
+    // Quality detection
+    detectImageQuality() {
+        // Based on device pixel ratio and connection
+        const dpr = window.devicePixelRatio || 1;
+        const connection = navigator.connection;
+        
+        if (connection) {
+            // Check connection type
+            if (connection.saveData || connection.effectiveType === 'slow-2g') {
+                return 'low';
+            } else if (connection.effectiveType === '3g') {
+                return 'medium';
+            }
+        }
+        
+        // Check device pixel ratio
+        if (dpr >= 2) {
+            return 'high';
+        } else if (dpr >= 1.5) {
+            return 'medium';
+        }
+        
+        return 'medium';
+    }
+    
+    detectAudioQuality() {
+        const connection = navigator.connection;
+        
+        if (connection) {
+            if (connection.saveData || connection.effectiveType === 'slow-2g') {
+                return 'low';
+            } else if (connection.effectiveType === '3g') {
+                return 'medium';
+            }
+        }
+        
+        return 'high';
+    }
+    
+    detectConnectionSpeed() {
+        if (navigator.connection) {
+            const connection = navigator.connection;
+            
+            console.log('Connection info:', {
+                effectiveType: connection.effectiveType,
+                downlink: connection.downlink,
+                rtt: connection.rtt,
+                saveData: connection.saveData
+            });
+            
+            // Adjust loading strategy based on connection
+            if (connection.effectiveType === 'slow-2g' || connection.saveData) {
+                this.config.parallelLoads = 2;
+                this.config.preloadAudio = false;
+                this.config.lazyLoadImages = true;
+            } else if (connection.effectiveType === '4g') {
+                this.config.parallelLoads = 8;
+                this.config.preloadAudio = true;
+                this.config.lazyLoadImages = false;
+            }
+        }
+    }
+    
+    // Preload specific categories
+    preloadCategory(category) {
+        const assets = this.manifest[category];
+        if (!assets) return;
+        
+        const ids = Object.keys(assets);
+        return this.loadBatch(ids, 'normal');
+    }
+    
+    // Clear cache
+    clearCache() {
+        this.cache.images.clear();
+        this.cache.audio.clear();
+        this.cache.data.clear();
+        
+        console.log('Resource cache cleared');
+    }
+    
+    // Get loading statistics
+    getLoadingStats() {
+        return {
+            total: this.loadingState.totalAssets,
+            loaded: this.loadingState.loadedAssets,
+            failed: this.loadingState.failedAssets.length,
+            progress: this.loadingState.totalAssets > 0 ? 
+                this.loadingState.loadedAssets / this.loadingState.totalAssets : 0,
+            cacheSize: this.getCacheSize()
+        };
+    }
+    
+    getCacheSize() {
+        let count = 0;
+        for (const cache of Object.values(this.cache)) {
+            count += cache.size;
+        }
+        return count;
+    }
+}
+
+export default ResourceManager;

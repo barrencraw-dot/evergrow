@@ -1,0 +1,475 @@
+// StateManager.js
+// Centralized game state management with reactive updates
+// Implements state persistence and validation
+
+class StateManager {
+    constructor() {
+        // Core game state structure
+        this.state = {
+            // Player progression
+            currency: 0,
+            currencyPerSecond: 0,
+            totalCurrencyEarned: 0,
+            clickPower: 1,
+            clicks: 0,
+            
+            // Prestige system
+            prestigeLevel: 0,
+            prestigePoints: 0,
+            soulCurrency: 0,
+            totalPrestiges: 0,
+            
+            // Premium currency
+            premiumCurrency: 0,
+            totalSpent: 0,
+            vipLevel: 0,
+            
+            // Subscription
+            subscription: {
+                active: false,
+                tier: null,
+                benefits: {},
+                nextBilling: null
+            },
+            
+            // Session tracking
+            sessionStartTime: Date.now(),
+            lastActiveTime: Date.now(),
+            totalPlayTime: 0,
+            sessionCount: 1,
+            
+            // Engagement metrics
+            clicksThisSession: 0,
+            purchasesThisSession: 0,
+            adsWatchedThisSession: 0,
+            
+            // Social
+            friendsInvited: 0,
+            guildId: null,
+            leaderboardRank: null,
+            
+            // Feature unlocks
+            unlockedFeatures: new Set(),
+            hasSeenTutorial: false,
+            hasSeenWelcomeOffer: false,
+            hasSeenComebackOffer: false,
+            hasSeenMilestoneOffer: false
+        };
+        
+        // State change listeners
+        this.listeners = new Map();
+        this.globalListeners = new Set();
+        
+        // State history for undo/redo
+        this.history = [];
+        this.historyIndex = -1;
+        this.maxHistorySize = 50;
+        
+        // Validation rules
+        this.validators = {
+            currency: (value) => value >= 0 && value < Number.MAX_SAFE_INTEGER,
+            currencyPerSecond: (value) => value >= 0,
+            prestigeLevel: (value) => value >= 0 && Number.isInteger(value),
+            premiumCurrency: (value) => value >= 0 && Number.isInteger(value)
+        };
+        
+        // State persistence
+        this.persistentKeys = [
+            'currency',
+            'currencyPerSecond',
+            'totalCurrencyEarned',
+            'clickPower',
+            'clicks',
+            'prestigeLevel',
+            'prestigePoints',
+            'soulCurrency',
+            'totalPrestiges',
+            'premiumCurrency',
+            'totalSpent',
+            'vipLevel',
+            'subscription',
+            'totalPlayTime',
+            'sessionCount',
+            'friendsInvited',
+            'guildId',
+            'unlockedFeatures',
+            'hasSeenTutorial',
+            'hasSeenWelcomeOffer',
+            'hasSeenComebackOffer',
+            'hasSeenMilestoneOffer'
+        ];
+        
+        // Computed properties
+        this.computed = {
+            prestigeMultiplier: () => 1 + (this.state.prestigeLevel * 0.5),
+            soulMultiplier: () => 1 + (this.state.soulCurrency * 0.01),
+            vipMultiplier: () => 1 + (this.state.vipLevel * 0.25),
+            totalMultiplier: () => {
+                return this.computed.prestigeMultiplier() *
+                       this.computed.soulMultiplier() *
+                       this.computed.vipMultiplier();
+            }
+        };
+        
+        // Auto-save configuration
+        this.autoSaveInterval = 30000; // 30 seconds
+        this.autoSaveTimer = null;
+    }
+    
+    initialize() {
+        console.log('📊 State Manager initialized');
+        
+        // Load saved state
+        this.loadState();
+        
+        // Start auto-save
+        this.startAutoSave();
+        
+        // Set up state proxies for reactive updates
+        this.setupReactivity();
+        
+        // Initialize history
+        this.saveToHistory();
+    }
+    
+    setupReactivity() {
+        // Create a proxy to intercept state changes
+        const handler = {
+            set: (target, property, value) => {
+                const oldValue = target[property];
+                
+                // Validate if validator exists
+                if (this.validators[property]) {
+                    if (!this.validators[property](value)) {
+                        console.warn(`Invalid value for ${property}:`, value);
+                        return false;
+                    }
+                }
+                
+                // Set the value
+                target[property] = value;
+                
+                // Notify listeners
+                this.notifyListeners(property, value, oldValue);
+                
+                // Update last active time
+                if (property !== 'lastActiveTime') {
+                    this.state.lastActiveTime = Date.now();
+                }
+                
+                return true;
+            },
+            
+            get: (target, property) => {
+                // Return computed properties
+                if (this.computed[property]) {
+                    return this.computed[property]();
+                }
+                return target[property];
+            }
+        };
+        
+        // Replace state with proxy
+        this.state = new Proxy(this.state, handler);
+    }
+    
+    // State modification methods
+    update(key, value) {
+        if (typeof key === 'object') {
+            // Batch update
+            Object.entries(key).forEach(([k, v]) => {
+                this.state[k] = v;
+            });
+        } else {
+            this.state[key] = value;
+        }
+    }
+    
+    increment(key, amount = 1) {
+        if (typeof this.state[key] === 'number') {
+            this.state[key] += amount;
+        }
+    }
+    
+    decrement(key, amount = 1) {
+        if (typeof this.state[key] === 'number') {
+            this.state[key] = Math.max(0, this.state[key] - amount);
+        }
+    }
+    
+    toggle(key) {
+        if (typeof this.state[key] === 'boolean') {
+            this.state[key] = !this.state[key];
+        }
+    }
+    
+    // Listener management
+    on(key, callback) {
+        if (!this.listeners.has(key)) {
+            this.listeners.set(key, new Set());
+        }
+        this.listeners.get(key).add(callback);
+        
+        // Return unsubscribe function
+        return () => {
+            const callbacks = this.listeners.get(key);
+            if (callbacks) {
+                callbacks.delete(callback);
+            }
+        };
+    }
+    
+    onAny(callback) {
+        this.globalListeners.add(callback);
+        
+        // Return unsubscribe function
+        return () => {
+            this.globalListeners.delete(callback);
+        };
+    }
+    
+    notifyListeners(key, newValue, oldValue) {
+        // Notify specific listeners
+        const callbacks = this.listeners.get(key);
+        if (callbacks) {
+            callbacks.forEach(callback => {
+                try {
+                    callback(newValue, oldValue, key);
+                } catch (error) {
+                    console.error('State listener error:', error);
+                }
+            });
+        }
+        
+        // Notify global listeners
+        this.globalListeners.forEach(callback => {
+            try {
+                callback(key, newValue, oldValue);
+            } catch (error) {
+                console.error('Global state listener error:', error);
+            }
+        });
+    }
+    
+    // State history
+    saveToHistory() {
+        // Remove future history if we're not at the end
+        if (this.historyIndex < this.history.length - 1) {
+            this.history = this.history.slice(0, this.historyIndex + 1);
+        }
+        
+        // Add current state to history
+        this.history.push(this.getSnapshot());
+        
+        // Limit history size
+        if (this.history.length > this.maxHistorySize) {
+            this.history.shift();
+        } else {
+            this.historyIndex++;
+        }
+    }
+    
+    undo() {
+        if (this.canUndo()) {
+            this.historyIndex--;
+            this.restoreSnapshot(this.history[this.historyIndex]);
+        }
+    }
+    
+    redo() {
+        if (this.canRedo()) {
+            this.historyIndex++;
+            this.restoreSnapshot(this.history[this.historyIndex]);
+        }
+    }
+    
+    canUndo() {
+        return this.historyIndex > 0;
+    }
+    
+    canRedo() {
+        return this.historyIndex < this.history.length - 1;
+    }
+    
+    // Snapshots
+    getSnapshot() {
+        const snapshot = {};
+        
+        // Clone state
+        Object.entries(this.state).forEach(([key, value]) => {
+            if (value instanceof Set) {
+                snapshot[key] = Array.from(value);
+            } else if (typeof value === 'object' && value !== null) {
+                snapshot[key] = JSON.parse(JSON.stringify(value));
+            } else {
+                snapshot[key] = value;
+            }
+        });
+        
+        return snapshot;
+    }
+    
+    restoreSnapshot(snapshot) {
+        Object.entries(snapshot).forEach(([key, value]) => {
+            if (Array.isArray(value) && key === 'unlockedFeatures') {
+                this.state[key] = new Set(value);
+            } else {
+                this.state[key] = value;
+            }
+        });
+    }
+    
+    // Persistence
+    saveState() {
+        const saveData = {};
+        
+        // Save only persistent keys
+        this.persistentKeys.forEach(key => {
+            const value = this.state[key];
+            
+            if (value instanceof Set) {
+                saveData[key] = Array.from(value);
+            } else {
+                saveData[key] = value;
+            }
+        });
+        
+        // Add metadata
+        saveData._version = '1.0.0';
+        saveData._timestamp = Date.now();
+        
+        // Save to localStorage
+        try {
+            localStorage.setItem('evergrow_state', JSON.stringify(saveData));
+            return true;
+        } catch (error) {
+            console.error('Failed to save state:', error);
+            return false;
+        }
+    }
+    
+    loadState() {
+        try {
+            const saved = localStorage.getItem('evergrow_state');
+            if (!saved) return false;
+            
+            const saveData = JSON.parse(saved);
+            
+            // Check version compatibility
+            if (saveData._version !== '1.0.0') {
+                console.warn('Save version mismatch');
+                // Could implement migration here
+            }
+            
+            // Restore state
+            this.persistentKeys.forEach(key => {
+                if (saveData.hasOwnProperty(key)) {
+                    const value = saveData[key];
+                    
+                    if (key === 'unlockedFeatures') {
+                        this.state[key] = new Set(value);
+                    } else {
+                        this.state[key] = value;
+                    }
+                }
+            });
+            
+            // Update session info
+            this.state.sessionCount++;
+            this.state.sessionStartTime = Date.now();
+            this.state.clicksThisSession = 0;
+            this.state.purchasesThisSession = 0;
+            this.state.adsWatchedThisSession = 0;
+            
+            console.log('State loaded successfully');
+            return true;
+            
+        } catch (error) {
+            console.error('Failed to load state:', error);
+            return false;
+        }
+    }
+    
+    clearState() {
+        // Reset to initial state
+        Object.keys(this.state).forEach(key => {
+            if (typeof this.state[key] === 'number') {
+                this.state[key] = 0;
+            } else if (typeof this.state[key] === 'boolean') {
+                this.state[key] = false;
+            } else if (key === 'unlockedFeatures') {
+                this.state[key] = new Set();
+            } else if (typeof this.state[key] === 'object') {
+                this.state[key] = null;
+            }
+        });
+        
+        // Reset session info
+        this.state.sessionStartTime = Date.now();
+        this.state.lastActiveTime = Date.now();
+        this.state.sessionCount = 1;
+        
+        // Clear saved state
+        localStorage.removeItem('evergrow_state');
+        
+        // Clear history
+        this.history = [];
+        this.historyIndex = -1;
+        this.saveToHistory();
+    }
+    
+    // Auto-save
+    startAutoSave() {
+        this.autoSaveTimer = setInterval(() => {
+            this.saveState();
+        }, this.autoSaveInterval);
+    }
+    
+    stopAutoSave() {
+        if (this.autoSaveTimer) {
+            clearInterval(this.autoSaveTimer);
+            this.autoSaveTimer = null;
+        }
+    }
+    
+    // Utility methods
+    getState() {
+        return this.state;
+    }
+    
+    getComputed(key) {
+        return this.computed[key] ? this.computed[key]() : null;
+    }
+    
+    getAllComputed() {
+        const result = {};
+        Object.keys(this.computed).forEach(key => {
+            result[key] = this.computed[key]();
+        });
+        return result;
+    }
+    
+    // Feature unlocking
+    unlockFeature(feature) {
+        this.state.unlockedFeatures.add(feature);
+        this.notifyListeners('unlockedFeatures', this.state.unlockedFeatures);
+    }
+    
+    isFeatureUnlocked(feature) {
+        return this.state.unlockedFeatures.has(feature);
+    }
+    
+    // Debugging
+    debug() {
+        console.group('State Manager Debug');
+        console.log('Current State:', this.getSnapshot());
+        console.log('Computed Values:', this.getAllComputed());
+        console.log('History Length:', this.history.length);
+        console.log('History Index:', this.historyIndex);
+        console.log('Listeners:', this.listeners.size);
+        console.log('Global Listeners:', this.globalListeners.size);
+        console.groupEnd();
+    }
+}
+
+export default StateManager;

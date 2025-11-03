@@ -1,0 +1,795 @@
+// ShopManager.js
+// Handles in-app purchases with psychological pricing strategies
+// Implements anchoring, decoy effect, and scarcity mechanics
+
+class ShopManager {
+    constructor(game) {
+        this.game = game;
+        
+        // Psychological pricing configuration
+        this.config = {
+            // Anchoring: Show most expensive first
+            anchorFirst: true,
+            
+            // Decoy effect: Make middle option most attractive
+            decoyPricing: true,
+            
+            // Scarcity timers
+            limitedTimeOffers: true,
+            offerDuration: 86400000, // 24 hours
+            
+            // Bundle psychology
+            showSavingsPercentage: true,
+            highlightBestValue: true,
+            
+            // Social proof
+            showPurchaseStats: true,
+            popularityThreshold: 0.3, // 30% of players
+            
+            // First-time buyer bonus
+            firstPurchaseBonus: 1.5, // 50% extra
+            
+            // Subscription benefits
+            subscriptionMultiplier: 2
+        };
+        
+        // Premium currency packages with psychological pricing
+        this.packages = {
+            // Starter pack - Loss leader
+            starter: {
+                id: 'starter_pack',
+                name: 'Starter Seeds',
+                icon: '🌱',
+                gems: 100,
+                price: 0.99,
+                originalPrice: null,
+                bonus: 0,
+                popular: false,
+                limited: false,
+                firstTimerOnly: true,
+                description: 'Perfect for beginners!'
+            },
+            
+            // Small package - Anchor point
+            small: {
+                id: 'gem_pile',
+                name: 'Gem Pile',
+                icon: '💎',
+                gems: 500,
+                price: 4.99,
+                originalPrice: null,
+                bonus: 0,
+                popular: false,
+                limited: false,
+                description: 'A handful of premium gems'
+            },
+            
+            // Medium package - Decoy (most popular)
+            medium: {
+                id: 'gem_chest',
+                name: 'Gem Chest',
+                icon: '💰',
+                gems: 1200,
+                price: 9.99,
+                originalPrice: null,
+                bonus: 20, // 20% bonus
+                popular: true,
+                limited: false,
+                badge: 'BEST VALUE',
+                description: 'Most popular choice!',
+                socialProof: '73% of players choose this'
+            },
+            
+            // Large package - Premium option
+            large: {
+                id: 'gem_vault',
+                name: 'Gem Vault',
+                icon: '🏦',
+                gems: 2500,
+                price: 19.99,
+                originalPrice: null,
+                bonus: 25, // 25% bonus
+                popular: false,
+                limited: false,
+                description: 'For serious growers'
+            },
+            
+            // Whale package - Prestige pricing
+            whale: {
+                id: 'gem_mountain',
+                name: 'Gem Mountain',
+                icon: '🏔️',
+                gems: 7000,
+                price: 49.99,
+                originalPrice: null,
+                bonus: 40, // 40% bonus
+                popular: false,
+                limited: false,
+                vip: true,
+                description: 'Become a VIP grower!'
+            },
+            
+            // Mega whale - Anchoring extreme
+            mega: {
+                id: 'gem_galaxy',
+                name: 'Gem Galaxy',
+                icon: '🌌',
+                gems: 15000,
+                price: 99.99,
+                originalPrice: null,
+                bonus: 50, // 50% bonus
+                popular: false,
+                limited: false,
+                vip: true,
+                exclusive: true,
+                description: 'Ultimate power!',
+                perks: ['VIP Status', 'Exclusive Skin', 'Double Offline']
+            }
+        };
+        
+        // Special offers with time pressure
+        this.specialOffers = {
+            welcome: {
+                id: 'welcome_offer',
+                name: 'Welcome Bundle',
+                icon: '🎁',
+                contents: {
+                    gems: 1000,
+                    goldMultiplier: 2,
+                    autoClickers: 5
+                },
+                price: 2.99,
+                originalPrice: 14.99,
+                discount: 80,
+                duration: 3600000, // 1 hour
+                oneTime: true,
+                trigger: 'first_session',
+                description: 'One-time 80% OFF!'
+            },
+            
+            comeback: {
+                id: 'comeback_offer',
+                name: 'Welcome Back!',
+                icon: '🎉',
+                contents: {
+                    gems: 500,
+                    timeWarp: 24 // 24 hours of production
+                },
+                price: 1.99,
+                originalPrice: 9.99,
+                discount: 80,
+                duration: 7200000, // 2 hours
+                oneTime: true,
+                trigger: 'return_after_7_days',
+                description: 'We missed you! Special price'
+            },
+            
+            milestone: {
+                id: 'milestone_offer',
+                name: 'Milestone Pack',
+                icon: '🏆',
+                contents: {
+                    gems: 2000,
+                    premiumCurrency: 100,
+                    exclusiveSkin: 'golden_clicker'
+                },
+                price: 7.99,
+                originalPrice: 29.99,
+                discount: 73,
+                duration: 14400000, // 4 hours
+                trigger: 'reach_1m_currency',
+                description: 'Celebrate your achievement!'
+            }
+        };
+        
+        // Subscription tiers
+        this.subscriptions = {
+            bronze: {
+                id: 'vip_bronze',
+                name: 'VIP Bronze',
+                icon: '🥉',
+                price: 4.99,
+                period: 'monthly',
+                benefits: {
+                    dailyGems: 50,
+                    productionBonus: 1.5,
+                    offlineBonus: 2,
+                    noAds: true,
+                    exclusiveEvents: false
+                },
+                description: 'Essential VIP benefits'
+            },
+            
+            silver: {
+                id: 'vip_silver',
+                name: 'VIP Silver',
+                icon: '🥈',
+                price: 9.99,
+                period: 'monthly',
+                benefits: {
+                    dailyGems: 150,
+                    productionBonus: 2,
+                    offlineBonus: 3,
+                    noAds: true,
+                    exclusiveEvents: true,
+                    autoPrestige: true
+                },
+                description: 'Premium VIP experience',
+                popular: true
+            },
+            
+            gold: {
+                id: 'vip_gold',
+                name: 'VIP Gold',
+                icon: '🥇',
+                price: 19.99,
+                period: 'monthly',
+                benefits: {
+                    dailyGems: 300,
+                    productionBonus: 3,
+                    offlineBonus: 5,
+                    noAds: true,
+                    exclusiveEvents: true,
+                    autoPrestige: true,
+                    vipSupport: true,
+                    betaAccess: true
+                },
+                description: 'Ultimate VIP status'
+            }
+        };
+        
+        // Purchase tracking
+        this.purchaseHistory = [];
+        this.activeOffers = new Map();
+        this.offerTimers = new Map();
+        
+        // Platform payment integration
+        this.paymentMethods = {
+            google: null,
+            apple: null,
+            stripe: null
+        };
+        
+        // Analytics
+        this.analytics = {
+            revenue: 0,
+            transactions: 0,
+            averageTransaction: 0,
+            conversionRate: 0,
+            popularPackages: {}
+        };
+    }
+    
+    initialize() {
+        console.log('💰 Shop Manager initialized - Psychological pricing active');
+        
+        // Set up payment methods
+        this.initializePaymentMethods();
+        
+        // Check for special offer triggers
+        this.checkSpecialOffers();
+        
+        // Start offer rotation
+        this.startOfferRotation();
+        
+        // Load purchase history
+        this.loadPurchaseHistory();
+        
+        // Initialize shop UI
+        this.game.ui.initializeShop(this);
+    }
+    
+    initializePaymentMethods() {
+        // Detect platform and initialize appropriate payment SDK
+        if (window.google?.payments) {
+            this.paymentMethods.google = window.google.payments;
+        }
+        
+        if (window.webkit?.messageHandlers?.iap) {
+            this.paymentMethods.apple = window.webkit.messageHandlers.iap;
+        }
+        
+        // Web payments fallback
+        if (!this.paymentMethods.google && !this.paymentMethods.apple) {
+            // Initialize Stripe or other web payment provider
+            console.log('Using web payment provider');
+        }
+    }
+    
+    checkSpecialOffers() {
+        const state = this.game.state;
+        const now = Date.now();
+        
+        // Welcome offer for new players
+        if (!state.hasSeenWelcomeOffer && state.sessionCount === 1) {
+            this.activateSpecialOffer('welcome');
+        }
+        
+        // Comeback offer
+        const daysSinceLastPlay = (now - state.lastActiveTime) / 86400000;
+        if (daysSinceLastPlay >= 7 && !state.hasSeenComebackOffer) {
+            this.activateSpecialOffer('comeback');
+        }
+        
+        // Milestone offers
+        if (state.totalCurrencyEarned >= 1000000 && !state.hasSeenMilestoneOffer) {
+            this.activateSpecialOffer('milestone');
+        }
+    }
+    
+    activateSpecialOffer(offerId) {
+        const offer = this.specialOffers[offerId];
+        if (!offer || this.activeOffers.has(offerId)) return;
+        
+        const expiryTime = Date.now() + offer.duration;
+        
+        this.activeOffers.set(offerId, {
+            ...offer,
+            activatedAt: Date.now(),
+            expiresAt: expiryTime
+        });
+        
+        // Set expiry timer
+        const timer = setTimeout(() => {
+            this.expireOffer(offerId);
+        }, offer.duration);
+        
+        this.offerTimers.set(offerId, timer);
+        
+        // Show offer with urgency
+        this.game.ui.showSpecialOffer(offer);
+        this.game.lossAversion.createUrgency(offer);
+        
+        // Track activation
+        this.game.analytics.track('special_offer_shown', {
+            offer: offerId,
+            price: offer.price,
+            discount: offer.discount
+        });
+    }
+    
+    expireOffer(offerId) {
+        this.activeOffers.delete(offerId);
+        
+        const timer = this.offerTimers.get(offerId);
+        if (timer) {
+            clearTimeout(timer);
+            this.offerTimers.delete(offerId);
+        }
+        
+        // Show expiration with loss framing
+        this.game.ui.showOfferExpired(offerId);
+        this.game.lossAversion.showMissedOpportunity(this.specialOffers[offerId]);
+    }
+    
+    startOfferRotation() {
+        // Flash sales every 2-4 hours
+        const scheduleFlashSale = () => {
+            const delay = 7200000 + Math.random() * 7200000; // 2-4 hours
+            
+            setTimeout(() => {
+                this.createFlashSale();
+                scheduleFlashSale();
+            }, delay);
+        };
+        
+        scheduleFlashSale();
+    }
+    
+    createFlashSale() {
+        // Pick random package for flash sale
+        const packages = Object.values(this.packages);
+        const eligiblePackages = packages.filter(p => !p.firstTimerOnly && p.price > 4.99);
+        const package = eligiblePackages[Math.floor(Math.random() * eligiblePackages.length)];
+        
+        const flashSale = {
+            id: `flash_${Date.now()}`,
+            packageId: package.id,
+            originalPrice: package.price,
+            salePrice: package.price * 0.7, // 30% off
+            discount: 30,
+            duration: 300000, // 5 minutes
+            stock: 100 // Fake scarcity
+        };
+        
+        this.activeOffers.set(flashSale.id, flashSale);
+        
+        // Aggressive notification
+        this.game.events.triggerFlashSale(flashSale);
+        
+        // Auto-expire
+        setTimeout(() => {
+            this.expireOffer(flashSale.id);
+        }, flashSale.duration);
+    }
+    
+    async processPurchase(packageId) {
+        const package = this.packages[packageId];
+        if (!package) {
+            console.error('Invalid package:', packageId);
+            return false;
+        }
+        
+        // Show processing
+        this.game.ui.showPurchaseProcessing();
+        
+        try {
+            // Platform-specific purchase flow
+            const receipt = await this.executePlatformPurchase(package);
+            
+            // Verify with backend
+            const verified = await this.verifyPurchase(receipt);
+            
+            if (verified) {
+                // Grant rewards
+                this.grantPurchaseRewards(package);
+                
+                // Show success with dopamine burst
+                this.game.ui.showPurchaseSuccess(package);
+                this.game.dopamine.triggerPurchaseEuphoria();
+                
+                // Track purchase
+                this.trackPurchase(package);
+                
+                // Check for first purchase bonus
+                if (this.purchaseHistory.length === 1) {
+                    this.grantFirstPurchaseBonus(package);
+                }
+                
+                return true;
+            }
+            
+        } catch (error) {
+            console.error('Purchase failed:', error);
+            this.game.ui.showPurchaseError(error.message);
+        }
+        
+        return false;
+    }
+    
+    async executePlatformPurchase(package) {
+        // Simulate platform purchase (would integrate with real SDKs)
+        return new Promise((resolve, reject) => {
+            setTimeout(() => {
+                // Simulate success/failure
+                if (Math.random() > 0.1) {
+                    resolve({
+                        packageId: package.id,
+                        transactionId: `txn_${Date.now()}`,
+                        receipt: 'mock_receipt_data'
+                    });
+                } else {
+                    reject(new Error('Payment declined'));
+                }
+            }, 1500);
+        });
+    }
+    
+    async verifyPurchase(receipt) {
+        // Verify with backend
+        try {
+            const response = await fetch('/api/purchase/verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.game.auth.token}`
+                },
+                body: JSON.stringify({ receipt })
+            });
+            
+            return response.ok;
+        } catch (error) {
+            // Offline purchase - queue for later verification
+            this.queueOfflinePurchase(receipt);
+            return true; // Optimistically grant rewards
+        }
+    }
+    
+    grantPurchaseRewards(package) {
+        // Add gems
+        const totalGems = package.gems + Math.floor(package.gems * (package.bonus / 100));
+        this.game.state.premiumCurrency += totalGems;
+        
+        // VIP benefits
+        if (package.vip) {
+            this.game.state.vipLevel = Math.max(this.game.state.vipLevel, 1);
+        }
+        
+        // Exclusive perks
+        if (package.exclusive) {
+            this.unlockExclusiveContent(package);
+        }
+        
+        // Update UI
+        this.game.ui.updatePremiumCurrency();
+        
+        // Save immediately
+        this.game.saveGameState();
+    }
+    
+    grantFirstPurchaseBonus(package) {
+        const bonusGems = Math.floor(package.gems * (this.config.firstPurchaseBonus - 1));
+        this.game.state.premiumCurrency += bonusGems;
+        
+        // Special first buyer rewards
+        this.game.achievements.unlock('first_purchase');
+        this.game.ui.showFirstPurchaseBonus(bonusGems);
+        
+        // Remove starter pack
+        delete this.packages.starter;
+    }
+    
+    trackPurchase(package) {
+        this.purchaseHistory.push({
+            packageId: package.id,
+            price: package.price,
+            timestamp: Date.now(),
+            gems: package.gems
+        });
+        
+        // Update analytics
+        this.analytics.transactions++;
+        this.analytics.revenue += package.price;
+        this.analytics.averageTransaction = this.analytics.revenue / this.analytics.transactions;
+        
+        // Track package popularity
+        this.analytics.popularPackages[package.id] = 
+            (this.analytics.popularPackages[package.id] || 0) + 1;
+        
+        // Send to analytics service
+        this.game.analytics.track('purchase_completed', {
+            package: package.id,
+            price: package.price,
+            currency: 'USD',
+            items: {
+                gems: package.gems,
+                bonus: package.bonus
+            }
+        });
+    }
+    
+    async processSubscription(tierId) {
+        const subscription = this.subscriptions[tierId];
+        if (!subscription) return false;
+        
+        try {
+            // Platform-specific subscription flow
+            const result = await this.executePlatformSubscription(subscription);
+            
+            if (result.success) {
+                this.activateSubscription(subscription);
+                return true;
+            }
+        } catch (error) {
+            console.error('Subscription failed:', error);
+            this.game.ui.showSubscriptionError(error.message);
+        }
+        
+        return false;
+    }
+    
+    activateSubscription(subscription) {
+        this.game.state.subscription = {
+            active: true,
+            tier: subscription.id,
+            benefits: subscription.benefits,
+            nextBilling: Date.now() + 2592000000 // 30 days
+        };
+        
+        // Apply benefits immediately
+        this.applySubscriptionBenefits(subscription.benefits);
+        
+        // Show success
+        this.game.ui.showSubscriptionActivated(subscription);
+        
+        // Track
+        this.game.analytics.track('subscription_started', {
+            tier: subscription.id,
+            price: subscription.price
+        });
+    }
+    
+    applySubscriptionBenefits(benefits) {
+        // Production bonus
+        this.game.progression.multipliers.subscription = benefits.productionBonus;
+        
+        // Daily gems
+        this.scheduleDailyGems(benefits.dailyGems);
+        
+        // Remove ads
+        if (benefits.noAds) {
+            this.game.ads.disable();
+        }
+        
+        // Exclusive events
+        if (benefits.exclusiveEvents) {
+            this.game.events.unlockVIPEvents();
+        }
+        
+        // Auto prestige
+        if (benefits.autoPrestige) {
+            this.game.prestige.enableAutoPrestige();
+        }
+    }
+    
+    scheduleDailyGems(amount) {
+        // Give gems daily at reset time
+        const giveGems = () => {
+            this.game.state.premiumCurrency += amount;
+            this.game.ui.showDailyVIPReward(amount);
+            
+            // Schedule next
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(0, 0, 0, 0);
+            
+            const delay = tomorrow - Date.now();
+            setTimeout(giveGems, delay);
+        };
+        
+        // Calculate time until next reset
+        const now = new Date();
+        const todayReset = new Date(now);
+        todayReset.setHours(0, 0, 0, 0);
+        
+        if (now > todayReset) {
+            // Already past today's reset, give immediately
+            giveGems();
+        } else {
+            // Wait until reset
+            setTimeout(giveGems, todayReset - now);
+        }
+    }
+    
+    getPackage(packageId) {
+        return this.packages[packageId] || 
+               [...this.activeOffers.values()].find(o => o.packageId === packageId);
+    }
+    
+    canAffordWithGems(cost) {
+        return this.game.state.premiumCurrency >= cost;
+    }
+    
+    spendGems(amount) {
+        if (!this.canAffordWithGems(amount)) return false;
+        
+        this.game.state.premiumCurrency -= amount;
+        this.game.ui.updatePremiumCurrency();
+        
+        // Track gem spending
+        this.game.analytics.track('gems_spent', {
+            amount,
+            remaining: this.game.state.premiumCurrency
+        });
+        
+        return true;
+    }
+    
+    // Special shop features
+    showShop(tab = 'gems') {
+        // Prepare shop data with psychological ordering
+        const shopData = {
+            packages: this.getPackagesForDisplay(),
+            subscriptions: this.subscriptions,
+            activeOffers: [...this.activeOffers.values()],
+            playerGems: this.game.state.premiumCurrency,
+            firstTime: this.purchaseHistory.length === 0
+        };
+        
+        this.game.ui.showShopModal(shopData, tab);
+        
+        // Track shop view
+        this.game.analytics.track('shop_opened', {
+            tab,
+            hasOffers: this.activeOffers.size > 0
+        });
+    }
+    
+    getPackagesForDisplay() {
+        const packages = Object.values(this.packages);
+        
+        if (this.config.anchorFirst) {
+            // Sort by price descending (most expensive first)
+            packages.sort((a, b) => b.price - a.price);
+        }
+        
+        // Apply visual psychology
+        packages.forEach(pkg => {
+            // Calculate value score
+            const gemsPerDollar = (pkg.gems * (1 + pkg.bonus / 100)) / pkg.price;
+            pkg.valueScore = gemsPerDollar;
+            
+            // Mark best value (usually middle option)
+            if (pkg.popular && this.config.highlightBestValue) {
+                pkg.highlight = true;
+            }
+        });
+        
+        return packages;
+    }
+    
+    queueOfflinePurchase(receipt) {
+        // Save to IndexedDB for later sync
+        const pendingPurchases = JSON.parse(
+            localStorage.getItem('pendingPurchases') || '[]'
+        );
+        
+        pendingPurchases.push({
+            receipt,
+            timestamp: Date.now()
+        });
+        
+        localStorage.setItem('pendingPurchases', JSON.stringify(pendingPurchases));
+        
+        // Register for background sync
+        if ('serviceWorker' in navigator && 'sync' in self.registration) {
+            self.registration.sync.register('sync-purchases');
+        }
+    }
+    
+    loadPurchaseHistory() {
+        const saved = localStorage.getItem('purchaseHistory');
+        if (saved) {
+            this.purchaseHistory = JSON.parse(saved);
+            
+            // Update analytics
+            this.purchaseHistory.forEach(purchase => {
+                this.analytics.revenue += purchase.price;
+                this.analytics.transactions++;
+            });
+            
+            if (this.analytics.transactions > 0) {
+                this.analytics.averageTransaction = 
+                    this.analytics.revenue / this.analytics.transactions;
+            }
+        }
+    }
+    
+    savePurchaseHistory() {
+        localStorage.setItem('purchaseHistory', JSON.stringify(this.purchaseHistory));
+    }
+    
+    unlockExclusiveContent(package) {
+        // Grant exclusive rewards based on package
+        switch (package.id) {
+            case 'gem_galaxy':
+                this.game.ui.unlockGalaxyTheme();
+                this.game.achievements.unlock('whale_status');
+                break;
+        }
+    }
+    
+    getSaveData() {
+        return {
+            history: this.purchaseHistory,
+            analytics: this.analytics,
+            activeOffers: [...this.activeOffers.entries()],
+            subscription: this.game.state.subscription
+        };
+    }
+    
+    loadSaveData(data) {
+        if (!data) return;
+        
+        if (data.history) {
+            this.purchaseHistory = data.history;
+        }
+        
+        if (data.analytics) {
+            Object.assign(this.analytics, data.analytics);
+        }
+        
+        if (data.subscription) {
+            this.game.state.subscription = data.subscription;
+            if (data.subscription.active) {
+                const sub = Object.values(this.subscriptions)
+                    .find(s => s.id === data.subscription.tier);
+                if (sub) {
+                    this.applySubscriptionBenefits(sub.benefits);
+                }
+            }
+        }
+    }
+}
+
+export default ShopManager;
