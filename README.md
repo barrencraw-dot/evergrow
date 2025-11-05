@@ -11,12 +11,25 @@ EverGrow is a minimalist idle growth game that runs entirely in the browser. Gro
 
 ### Development quick start
 
+#### Static client only
+
 ```bash
 cd EverGrow/app
 python -m http.server 8080
 ```
 
 Open http://localhost:8080/ in a browser to play the game from source.
+
+#### Full-stack sandbox
+
+Install dependencies and launch the local Node tooling to serve both the static client and the Express backend scaffold.
+
+```bash
+npm install
+npm run dev
+```
+
+The client is hosted from `http://localhost:4173` by default and the backend boots using the configuration in `EverGrow/backend-server.js`.
 
 ## Key systems
 
