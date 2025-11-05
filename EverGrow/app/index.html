@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EverGrow</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <div class="app">
+        <header class="app__header">
+            <h1>EverGrow</h1>
+            <p class="app__tagline">Cultivate your tiny planet and watch it flourish.</p>
+            <div class="app__header-actions">
+                <button id="reset-save" class="button button--secondary">Reset Save</button>
+                <span id="save-status" class="save-status" aria-live="polite"></span>
+            </div>
+        </header>
+
+        <main class="layout">
+            <section class="panel panel--primary">
+                <h2 class="panel__title">Biosphere</h2>
+                <p class="stat stat--highlight">
+                    <span class="stat__label">Biomass:</span>
+                    <span id="biomass" class="stat__value">0</span>
+                </p>
+                <p class="stat">
+                    <span class="stat__label">Growth per second:</span>
+                    <span id="growth-per-second" class="stat__value">0</span>
+                </p>
+                <p class="stat">
+                    <span class="stat__label">Growth per click:</span>
+                    <span id="growth-per-click" class="stat__value">1</span>
+                </p>
+
+                <button id="grow-button" class="button button--primary button--giant">
+                    Grow the world 🌱
+                </button>
+
+                <div class="progress">
+                    <label class="progress__label" for="prestige-progress">Prestige readiness</label>
+                    <progress id="prestige-progress" class="progress__bar" max="1" value="0"></progress>
+                    <p id="prestige-hint" class="progress__hint">Grow your planet to unlock prestige.</p>
+                    <button id="prestige-button" class="button button--prestige" disabled>Rebirth for Evolution</button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <h2 class="panel__title">Upgrades</h2>
+                <ul id="upgrade-list" class="upgrade-list" aria-live="polite"></ul>
+            </section>
+
+            <section class="panel">
+                <h2 class="panel__title">Achievements</h2>
+                <ul id="achievement-list" class="achievement-list" aria-live="polite"></ul>
+            </section>
+
+            <section class="panel">
+                <h2 class="panel__title">Daily Streak</h2>
+                <div id="streak" class="streak"></div>
+
+                <h3 class="panel__subtitle">Dynamic Events</h3>
+                <div id="event" class="event" aria-live="polite"></div>
+            </section>
+        </main>
+
+        <footer class="app__footer">
+            <p>Progress autosaves every 30 seconds. Data lives in your browser.</p>
+        </footer>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>
