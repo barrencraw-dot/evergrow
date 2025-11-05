@@ -139,9 +139,45 @@ userSchema.index({ 'social.guildId': 1 }); // Guild queries
 
 // Virtual for leaderboard ranking
 userSchema.virtual('rank').get(function() {
-    // Would be calculated dynamically
-    return 0;
+    if (this.analytics && typeof this.analytics.leaderboardRank === 'number') {
+        return this.analytics.leaderboardRank;
+    }
+
+    const populationEstimate = this.analytics && typeof this.analytics.playerBaseEstimate === 'number'
+        ? this.analytics.playerBaseEstimate
+        : 50000;
+
+    return this.estimateLeaderboardRank(populationEstimate);
 });
+
+userSchema.methods.estimateLeaderboardRank = function(populationEstimate = 50000) {
+    const gameState = this.gameState || {};
+    const analytics = this.analytics || {};
+
+    const totalCurrency = Number(gameState.totalCurrencyEarned) || 0;
+    const currencyPerSecond = Number(gameState.currencyPerSecond) || 0;
+    const prestigeLevel = Number(gameState.prestigeLevel) || 0;
+    const prestigePoints = Number(gameState.prestigePoints) || 0;
+    const totalClicks = Number(gameState.totalClicks) || 0;
+    const totalPlayTime = Number(gameState.totalPlayTime) || 0; // Seconds
+    const totalRevenue = Number(analytics.totalRevenue) || 0;
+
+    const prestigeWeight = 1 + prestigeLevel * 0.15 + prestigePoints * 0.01;
+    const productionWeight = currencyPerSecond * 1800; // Value 30 minutes of production
+    const engagementWeight = Math.sqrt(totalClicks) * 250 + (totalPlayTime / 3600) * 5000;
+    const monetizationWeight = totalRevenue * 2000;
+
+    const score = (totalCurrency * prestigeWeight) + productionWeight + engagementWeight + monetizationWeight;
+
+    if (!Number.isFinite(score) || score <= 0) {
+        return null;
+    }
+
+    const normalized = Math.min(0.999, Math.log10(score + 10) / 8);
+    const population = Math.max(1, Number(populationEstimate) || 1);
+
+    return Math.max(1, Math.round((1 - normalized) * population));
+};
 
 // Methods
 userSchema.methods.generateAuthToken = function() {
