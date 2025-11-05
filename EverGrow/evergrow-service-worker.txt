@@ -5,6 +5,12 @@ const CACHE_NAME = 'evergrow-v1.0.0';
 const RUNTIME_CACHE = 'evergrow-runtime';
 const OFFLINE_URL = '/offline.html';
 
+// IndexedDB configuration for offline queues
+const OFFLINE_DB_NAME = 'evergrow-offline';
+const OFFLINE_DB_VERSION = 1;
+const GAME_STATE_STORE = 'pending-game-states';
+const PURCHASE_STORE = 'pending-purchases';
+
 // Psychological optimization: Pre-cache critical assets for instant gratification
 const STATIC_ASSETS = [
     '/',
@@ -340,22 +346,198 @@ self.addEventListener('notificationclick', (event) => {
 });
 
 // Helper functions for IndexedDB operations
+function isIndexedDBSupported() {
+    return typeof indexedDB !== 'undefined';
+}
+
+function openOfflineDatabase() {
+    if (!isIndexedDBSupported()) {
+        return Promise.reject(new Error('IndexedDB is not supported in this environment'));
+    }
+
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
+
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+
+            if (!db.objectStoreNames.contains(GAME_STATE_STORE)) {
+                db.createObjectStore(GAME_STATE_STORE, { keyPath: 'id', autoIncrement: true });
+            }
+
+            if (!db.objectStoreNames.contains(PURCHASE_STORE)) {
+                db.createObjectStore(PURCHASE_STORE, { keyPath: 'id', autoIncrement: true });
+            }
+        };
+
+        request.onsuccess = () => {
+            resolve(request.result);
+        };
+
+        request.onerror = () => {
+            reject(request.error || new Error('Failed to open offline database'));
+        };
+
+        request.onblocked = () => {
+            console.warn('[Service Worker] IndexedDB upgrade is blocked');
+        };
+    });
+}
+
+async function readAllFromStore(storeName) {
+    const db = await openOfflineDatabase();
+
+    return new Promise((resolve, reject) => {
+        const results = [];
+        let settled = false;
+        const transaction = db.transaction(storeName, 'readonly');
+        const store = transaction.objectStore(storeName);
+
+        const resolveOnce = (value) => {
+            if (!settled) {
+                settled = true;
+                resolve(value);
+            }
+        };
+
+        const rejectOnce = (error) => {
+            if (!settled) {
+                settled = true;
+                reject(error);
+            }
+        };
+
+        if (typeof store.getAll === 'function') {
+            const request = store.getAll();
+            request.onsuccess = () => {
+                const data = Array.isArray(request.result) ? request.result.map((entry) => ({ ...entry })) : [];
+                resolveOnce(data);
+            };
+            request.onerror = () => {
+                rejectOnce(request.error || new Error('Failed to read data from IndexedDB'));
+            };
+        } else {
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    results.push({ ...cursor.value });
+                    cursor.continue();
+                } else {
+                    resolveOnce(results);
+                }
+            };
+            request.onerror = () => {
+                rejectOnce(request.error || new Error('Failed to iterate over IndexedDB cursor'));
+            };
+        }
+
+        transaction.oncomplete = () => {
+            db.close();
+            resolveOnce(results);
+        };
+
+        transaction.onerror = () => {
+            db.close();
+            rejectOnce(transaction.error || new Error('IndexedDB transaction failed'));
+        };
+
+        transaction.onabort = () => {
+            db.close();
+            rejectOnce(transaction.error || new Error('IndexedDB transaction aborted'));
+        };
+    });
+}
+
+async function deleteFromStore(storeName, key) {
+    const db = await openOfflineDatabase();
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const transaction = db.transaction(storeName, 'readwrite');
+        transaction.objectStore(storeName).delete(key);
+
+        const resolveOnce = () => {
+            if (!settled) {
+                settled = true;
+                resolve();
+            }
+        };
+
+        const rejectOnce = (error) => {
+            if (!settled) {
+                settled = true;
+                reject(error);
+            }
+        };
+
+        transaction.oncomplete = () => {
+            db.close();
+            resolveOnce();
+        };
+
+        transaction.onerror = () => {
+            const error = transaction.error || new Error('IndexedDB deletion failed');
+            db.close();
+            rejectOnce(error);
+        };
+
+        transaction.onabort = () => {
+            const error = transaction.error || new Error('IndexedDB deletion aborted');
+            db.close();
+            rejectOnce(error);
+        };
+    });
+}
+
 async function getPendingGameStates() {
-    // Implementation would interface with IndexedDB
-    return [];
+    if (!isIndexedDBSupported()) {
+        return [];
+    }
+
+    try {
+        return await readAllFromStore(GAME_STATE_STORE);
+    } catch (error) {
+        console.error('[Service Worker] Failed to read pending game states:', error);
+        return [];
+    }
 }
 
 async function removePendingState(id) {
-    // Implementation would remove from IndexedDB
+    if (!isIndexedDBSupported() || typeof id === 'undefined' || id === null) {
+        return;
+    }
+
+    try {
+        await deleteFromStore(GAME_STATE_STORE, id);
+    } catch (error) {
+        console.error('[Service Worker] Failed to remove pending state:', error);
+    }
 }
 
 async function getPendingPurchases() {
-    // Implementation would interface with IndexedDB
-    return [];
+    if (!isIndexedDBSupported()) {
+        return [];
+    }
+
+    try {
+        return await readAllFromStore(PURCHASE_STORE);
+    } catch (error) {
+        console.error('[Service Worker] Failed to read pending purchases:', error);
+        return [];
+    }
 }
 
 async function removePendingPurchase(id) {
-    // Implementation would remove from IndexedDB
+    if (!isIndexedDBSupported() || typeof id === 'undefined' || id === null) {
+        return;
+    }
+
+    try {
+        await deleteFromStore(PURCHASE_STORE, id);
+    } catch (error) {
+        console.error('[Service Worker] Failed to remove pending purchase:', error);
+    }
 }
 
 async function notifyClients(event, data) {
