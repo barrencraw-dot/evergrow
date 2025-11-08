@@ -24,11 +24,13 @@ export class UIManager {
             event: document.getElementById('event'),
             prestigeProgress: document.getElementById('prestige-progress'),
             prestigeHint: document.getElementById('prestige-hint'),
+            prestigeProgressValue: document.getElementById('prestige-progress-value'),
             prestigeButton: document.getElementById('prestige-button'),
             saveStatus: document.getElementById('save-status'),
             resetButton: document.getElementById('reset-save'),
         };
 
+        this.statusTimeout = null;
         this._bindEvents();
         this.render(this.stateManager.getState());
     }
@@ -47,23 +49,37 @@ export class UIManager {
 
     showSaveFeedback() {
         const timestamp = new Date().toLocaleTimeString();
-        this.elements.saveStatus.textContent = `Saved at ${timestamp}`;
-        setTimeout(() => {
-            if (this.elements.saveStatus.textContent?.startsWith('Saved')) {
-                this.elements.saveStatus.textContent = '';
-            }
-        }, 5000);
+        this._setStatus(`Saved at ${timestamp}`, 5000);
     }
 
     showUnlockedMessage(unlocked) {
         if (!unlocked.length) return;
         const names = unlocked.map((a) => a.name).join(', ');
-        this.elements.saveStatus.textContent = `Unlocked: ${names}`;
-        setTimeout(() => {
-            if (this.elements.saveStatus.textContent?.startsWith('Unlocked')) {
-                this.elements.saveStatus.textContent = '';
-            }
-        }, 7000);
+        this._setStatus(`Unlocked: ${names}`, 7000);
+    }
+
+    _setStatus(message, duration = 0) {
+        if (this.statusTimeout) {
+            clearTimeout(this.statusTimeout);
+            this.statusTimeout = null;
+        }
+
+        if (!message) {
+            this.elements.saveStatus.textContent = '';
+            this.elements.saveStatus.classList.remove('save-status--visible');
+            return;
+        }
+
+        this.elements.saveStatus.textContent = message;
+        this.elements.saveStatus.classList.add('save-status--visible');
+
+        if (duration > 0) {
+            this.statusTimeout = setTimeout(() => {
+                if (this.elements.saveStatus.textContent === message) {
+                    this._setStatus('');
+                }
+            }, duration);
+        }
     }
 
     _bindEvents() {
@@ -76,12 +92,7 @@ export class UIManager {
         this.elements.prestigeButton.addEventListener('click', () => {
             const success = this.progression.prestige();
             if (success) {
-                this.elements.saveStatus.textContent = 'Evolution complete! Production multiplied.';
-                setTimeout(() => {
-                    if (this.elements.saveStatus.textContent.startsWith('Evolution')) {
-                        this.elements.saveStatus.textContent = '';
-                    }
-                }, 7000);
+                this._setStatus('Evolution complete! Production multiplied.', 7000);
                 this.render(this.stateManager.getState());
             }
         });
@@ -89,12 +100,7 @@ export class UIManager {
         this.elements.resetButton.addEventListener('click', () => {
             if (confirm('Reset your save? This cannot be undone.')) {
                 this.stateManager.reset();
-                this.elements.saveStatus.textContent = 'Save cleared.';
-                setTimeout(() => {
-                    if (this.elements.saveStatus.textContent.startsWith('Save cleared')) {
-                        this.elements.saveStatus.textContent = '';
-                    }
-                }, 5000);
+                this._setStatus('Save cleared.', 5000);
             }
         });
     }
@@ -102,6 +108,13 @@ export class UIManager {
     _renderUpgrades(state) {
         const upgrades = this.progression.getUpgrades(state);
         this.elements.upgradeList.innerHTML = '';
+        if (!upgrades.length) {
+            const emptyState = document.createElement('li');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'No upgrades available yet. Keep nurturing your world to discover new tech.';
+            this.elements.upgradeList.appendChild(emptyState);
+            return;
+        }
         for (const upgrade of upgrades) {
             const li = document.createElement('li');
             li.className = 'upgrade';
@@ -147,6 +160,13 @@ export class UIManager {
     _renderAchievements(state) {
         const achievements = this.achievements.getAchievements(state);
         this.elements.achievementList.innerHTML = '';
+        if (!achievements.length) {
+            const emptyState = document.createElement('li');
+            emptyState.className = 'empty-state';
+            emptyState.textContent = 'Achievements will appear here as your biosphere matures.';
+            this.elements.achievementList.appendChild(emptyState);
+            return;
+        }
         for (const achievement of achievements) {
             const li = document.createElement('li');
             li.className = `achievement ${achievement.unlocked ? '' : 'achievement--locked'}`;
@@ -184,7 +204,19 @@ export class UIManager {
 
     _renderPrestige(state) {
         const info = this.progression.calculatePrestigeReady(state);
-        this.elements.prestigeProgress.value = info.progress;
+        const clampedProgress = Math.min(1, Math.max(0, info.progress));
+        this.elements.prestigeProgress.value = clampedProgress;
+        const percent = Math.round(clampedProgress * 100);
+        this.elements.prestigeProgress.setAttribute('aria-valuenow', clampedProgress.toFixed(2));
+        this.elements.prestigeProgress.setAttribute('aria-valuemin', '0');
+        this.elements.prestigeProgress.setAttribute('aria-valuemax', '1');
+        this.elements.prestigeProgressValue.textContent = `${percent}% ready`;
+        this.elements.prestigeProgress.setAttribute(
+            'aria-valuetext',
+            info.canPrestige
+                ? `Ready to evolve with ${info.reward} evolution points.`
+                : `${percent}% towards evolution readiness.`
+        );
         this.elements.prestigeButton.disabled = !info.canPrestige;
         this.elements.prestigeHint.textContent = info.canPrestige
             ? `Rebirth now to earn ${info.reward} evolution points.`
